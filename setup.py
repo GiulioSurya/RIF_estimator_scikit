@@ -1,8 +1,9 @@
 from setuptools import setup, find_packages
 
 # Legge il file requirements.txt
-with open("requirements.txt") as f:
+with open("requirements.txt", encoding="utf-8") as f:
     requirements = f.read().splitlines()
+
 
 setup(
     name='rif_estimator',
