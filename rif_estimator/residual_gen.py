@@ -72,8 +72,8 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
             rf_params: Optional[Dict] = None,
             random_state: Optional[int] = None,
     ):
-        if strategy not in {"oob", "kfold", "none"}:
-            raise ValueError("strategy must be 'oob', 'kfold', or 'none'")
+        if strategy not in {"oob", "kfold", None}:
+            raise ValueError("strategy must be 'oob', 'kfold', or None")
 
         self.ind_cols = list(ind_cols)
         self.env_cols = list(env_cols)
@@ -90,7 +90,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         self._strategies = {
             "oob": OOBStrategy(),
             "kfold": KFoldStrategy(),
-            "none": NoneStrategy()
+            None: NoneStrategy()
         }
 
     def _get_rf_config(self, strategy: str) -> dict:
@@ -98,7 +98,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         configs = {
             "oob": {"oob_score": True, "bootstrap": True},
             "kfold": {"oob_score": False, "bootstrap": False},
-            "none": {"oob_score": False, "bootstrap": False}
+            None: {"oob_score": False, "bootstrap": False}
         }
         return configs[strategy]
 
@@ -120,7 +120,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
             n_jobs=-1,
             random_state=self.random_state,
             scoring="neg_mean_squared_error",
-            verbose=0,
+            verbose=1,
         ).fit(X_env, y_ind)
         return opt.best_params_
 
@@ -194,6 +194,15 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         return res.astype(float)
 
     def fit_transform(self, X: pd.DataFrame, y=None):
-        """Wrapper: fit + restituzione dei residui di training."""
-        return self.fit(X).train_residuals_
+        """
+        Fit + transform, garantendo che i residui restituiti
+        siano ESATTAMENTE quelli che verranno riconsegnati da
+        transform(X) in chiamate successive.
 
+        In pratica:
+        1. fit() salva train_residuals_ e training_data_hash_
+        2. transform(X) rileva che l'hash coincide
+           e restituisce gli stessi residui (senza ricalcolarli)
+        """
+        self.fit(X, y)
+        return self.transform(X)  # ⇐ usa l’hash

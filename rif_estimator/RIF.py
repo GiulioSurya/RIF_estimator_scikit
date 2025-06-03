@@ -17,7 +17,7 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
             env_cols: Sequence[str],
             *,
             contamination: float = 0.10,
-            residual_strategy: str = "oob",
+            residual_strategy: str = None,
             bayes_search: bool = False,
             bayes_iter: int = 3,
             bayes_cv: int = 3,
@@ -44,7 +44,7 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
     def fit(self, X: pd.DataFrame, y=None):
 
-        res_train = self.generator.fit_transform(X)
+        res_train = self.generator.fit_transform(X)  # qua c'è il problema in caso di data leakage
 
         self.if_ = IsolationForest(
             contamination=self.contamination,
@@ -77,6 +77,7 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         check_is_fitted(self, "if_")
         res = self.generator.transform(X)
         return self.if_.decision_function(res)
+
 
 
 
