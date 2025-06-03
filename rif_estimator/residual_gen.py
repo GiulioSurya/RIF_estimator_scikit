@@ -18,71 +18,44 @@ _DEFAULT_RF_SPACE: Dict[str, Integer] = {
 }
 
 
+class OOBStrategy:
+    """Strategia Out-Of-Bag."""
+
+    def get_predictions(self, rf: RandomForestRegressor, X_env: pd.DataFrame,
+                        y_ind: pd.Series, cv_splitter=None) -> tuple[RandomForestRegressor, np.ndarray]:
+        rf_fit = rf.fit(X_env, y_ind)
+        return rf_fit, rf_fit.oob_prediction_
+
+
+class KFoldStrategy:
+    """Strategia K-Fold Cross Validation."""
+
+    def get_predictions(self, rf: RandomForestRegressor, X_env: pd.DataFrame,
+                        y_ind: pd.Series, cv_splitter) -> tuple[RandomForestRegressor, np.ndarray]:
+        preds = cross_val_predict(rf, X_env, y_ind, cv=cv_splitter, n_jobs=-1)
+        rf_fit = rf.fit(X_env, y_ind)
+        return rf_fit, preds
+
+
+class NoneStrategy:
+    """Strategia semplice: solo fit, nessuna predizione leakage-free."""
+
+    def get_predictions(self, rf: RandomForestRegressor, X_env: pd.DataFrame,
+                        y_ind: pd.Series, cv_splitter=None) -> tuple[RandomForestRegressor, np.ndarray]:
+        rf_fit = rf.fit(X_env, y_ind)
+        # Restituisce predizioni standard (con potenziale leakage)
+        preds = rf_fit.predict(X_env)
+        return rf_fit, preds
+
+
 class ResidualGenerator(BaseEstimator, TransformerMixin):
     """
-    ResidualGenerator
-    -----------------
-    Trasforma un insieme di variabili indicatrici (target) in una matrice
-    di residui rispetto a una regressione sulle variabili ambientali (feature).
-    Per ogni colonna indicatrice `y_i`, viene addestrata una Random Forest
-    per stimare `ŷ_i = f(env)` e il residuo è calcolato come `r_i = y_i - ŷ_i`.
-
-    Parametri
-    ---------
-    ind_cols : list of str
-        Nomi delle colonne indicatrici (variabili target).
-    env_cols : list of str
-        Nomi delle colonne ambientali (variabili di input).
-    strategy : {"oob", "kfold"}, default="oob"
-        Strategia per il calcolo dei residui di training in modo leakage-free:
-        - "oob": utilizza le Out-Of-Bag predictions della Random Forest. Più veloce
-          e scalabile, ma può produrre `NaN` nei residui se il dataset è piccolo
-          o se alcune osservazioni non sono mai fuori-bag.
-        - "kfold": usa predizioni ottenute tramite cross-validation K-fold.
-          È più lento ma garantisce residui definiti per ogni osservazione,
-          a costo di maggiore complessità computazionale.
-    kfold_splits : int, default=5
-        Numero di fold per la strategia "kfold".
-    bayes_search : bool, default=False
-        Se True, applica un'ottimizzazione Bayesiana degli iperparametri
-        della Random Forest per ogni target.
-    bayes_iter : int, default=10
-        Numero di iterazioni della ricerca bayesiana.
-    bayes_cv : int, default=3
-        Numero di fold per la cross-validation interna della BayesSearchCV.
-    search_space : dict, optional
-        Spazio di ricerca per l'ottimizzazione Bayesiana (usa _DEFAULT_RF_SPACE se None).
-    rf_params : dict, optional
-        Parametri statici da passare alla Random Forest (bypassano la ricerca Bayesiana).
-    random_state : int or np.random.RandomState, optional
-        Semenza per la riproducibilità.
-
-    Attributi
-    ---------
-    train_residuals_ : np.ndarray, shape (n_samples, n_targets)
-        Matrice dei residui leakage-free per il dataset di training.
-        Può contenere valori `NaN` se la strategia "oob" non genera predizioni
-        per tutte le osservazioni (caso raro ma possibile con dataset piccoli).
-        Questi `NaN` vengono preservati e propagati senza generare errori.
-    models_ : dict
-        Modelli Random Forest addestrati per ciascuna colonna indicatrice.
-    best_params_ : dict
-        Parametri ottimali usati per ciascun modello (via BayesSearch o manuali).
-    training_data_hash_ : str
-        Hash MD5 del DataFrame utilizzato in fit() per riconoscere lo stesso
-        dataset in transform().
-
-    Note
-    ----
-    - La strategia "oob" è molto efficiente per dataset di grandi dimensioni, ma
-      nei piccoli dataset può portare a residui `NaN` se una osservazione è inclusa
-      in tutti i bootstrap sample (evento raro ma possibile).
-    - La strategia "kfold" è più affidabile per dataset piccoli o quando è
-      importante avere una matrice di residui completa e priva di `NaN`.
-    - Il metodo transform() è leakage-free solo quando viene chiamato sullo stesso
-      DataFrame utilizzato in fit() (riconosciuto tramite hash). Per dataset diversi,
-      utilizza predizioni standard che non sono leakage-free.
-
+    ResidualGenerator con Strategy Pattern
+    -------------------------------------
+    Supporta tre strategie:
+    - "oob": Out-Of-Bag predictions (leakage-free ma può avere NaN)
+    - "kfold": K-fold cross-validation (leakage-free, più lento)
+    - "none": Predizioni standard (veloce ma con potenziale data leakage)
     """
 
     def __init__(
@@ -90,7 +63,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
             ind_cols: Sequence[str],
             env_cols: Sequence[str],
             *,
-            strategy: str = "oob",
+            strategy: str = None,
             kfold_splits: int = 5,
             bayes_search: bool = False,
             bayes_iter: int = 3,
@@ -99,8 +72,8 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
             rf_params: Optional[Dict] = None,
             random_state: Optional[int] = None,
     ):
-        if strategy not in {"oob", "kfold"}:
-            raise ValueError("strategy must be 'oob' or 'kfold'")
+        if strategy not in {"oob", "kfold", "none"}:
+            raise ValueError("strategy must be 'oob', 'kfold', or 'none'")
 
         self.ind_cols = list(ind_cols)
         self.env_cols = list(env_cols)
@@ -113,158 +86,30 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         self.rf_params = rf_params or {}
         self.random_state = check_random_state(random_state)
 
+        # Strategy pattern
+        self._strategies = {
+            "oob": OOBStrategy(),
+            "kfold": KFoldStrategy(),
+            "none": NoneStrategy()
+        }
 
+    def _get_rf_config(self, strategy: str) -> dict:
+        """Restituisce la configurazione RF per la strategia."""
+        configs = {
+            "oob": {"oob_score": True, "bootstrap": True},
+            "kfold": {"oob_score": False, "bootstrap": False},
+            "none": {"oob_score": False, "bootstrap": False}
+        }
+        return configs[strategy]
 
     def _compute_dataframe_hash(self, X: pd.DataFrame) -> str:
         """Calcola un hash MD5 del DataFrame per identificarlo univocamente."""
-        # Usa solo le colonne rilevanti (ind_cols + env_cols)
         relevant_cols = self.ind_cols + self.env_cols
         X_relevant = X[relevant_cols]
-
-        # Converti in bytes per l'hash
         data_bytes = pd.util.hash_pandas_object(X_relevant, index=True).values.tobytes()
         return hashlib.md5(data_bytes).hexdigest()
 
-    # ----------------------------------------------------------------- #
-    # Fit
-    # ----------------------------------------------------------------- #
-    def fit(self, X: pd.DataFrame, y=None) -> "ResidualGenerator":
-        """
-        Addestra le RF e calcola i residui di training in modo coerente con
-        la strategia ("oob" o "kfold"). I residui vengono salvati in
-        ``self.train_residuals_`` e possono essere restituiti da fit_transform.
-
-        Salva anche un hash del DataFrame X per riconoscerlo in transform().
-        """
-
-        self.models_: Dict[str, object] = {}
-        self.best_params_: Dict[str, Dict] = {}
-        train_residuals: List[np.ndarray] = []
-
-        # Calcola e salva l'hash del DataFrame di training
-        self.training_data_hash_ = self._compute_dataframe_hash(X)
-
-        X_env = X[self.env_cols]
-
-        # Prepara lo splitter se serve
-        if self.strategy == "kfold":
-            cv = KFold(
-                n_splits=self.kfold_splits, shuffle=True, random_state=self.random_state
-            )
-
-        for col in self.ind_cols:
-            y_ind = X[col]
-
-            # iperparametri RF
-            params = (
-                self._bayesian_search(X_env, y_ind)
-                if self.bayes_search
-                else self.rf_params
-            )
-
-            rf = RandomForestRegressor(
-                    random_state=self.random_state,
-                    oob_score=self.strategy == "oob",
-                    bootstrap=self.strategy == "oob",
-                    n_jobs=-1,
-                    **params,
-                )
-
-
-            if self.strategy == "oob":
-                rf_fit = rf.fit(X_env, y_ind)
-                preds =rf_fit.oob_prediction_
-
-            else: #kfold
-                preds = cross_val_predict(
-                    rf,
-                    X_env,
-                    y_ind,
-                    cv=cv,
-                    n_jobs=-1,
-                )
-                # Fit finale per l'uso in transform
-                rf_fit = rf.fit(X_env, y_ind)
-
-            # ---------------------------------------------------------------------------------
-            # 2. Store
-            # ---------------------------------------------------------------------------------
-            self.models_[col] = rf_fit
-            self.best_params_[col] = params
-            train_residuals.append((y_ind - preds).to_numpy())
-
-
-        self.train_residuals_ = np.column_stack(train_residuals).astype(float)
-        return self
-
-    # ----------------------------------------------------------------- #
-    # Transform (nuovi dati o stesso dataset)
-    # ----------------------------------------------------------------- #
-    def transform(self, X: pd.DataFrame) -> np.ndarray:
-        """
-        Calcola la matrice residui per il DataFrame X.
-
-        Comportamento:
-        - Se X è lo stesso DataFrame utilizzato in fit() (riconosciuto tramite hash),
-          restituisce direttamente self.train_residuals_ (leakage-free).
-        - Se X è un DataFrame diverso, calcola residui standard utilizzando
-          i modelli addestrati (.predict()).
-        - Valori NaN nei residui vengono preservati e propagati senza errori.
-
-        Parameters
-        ----------
-        X : pd.DataFrame
-            DataFrame per cui calcolare i residui.
-
-        Returns
-        -------
-        np.ndarray, shape (n_samples, n_targets)
-            Matrice dei residui. Può contenere NaN se derivata da predizioni OOB
-            incomplete.
-
-        Note
-        ----
-        Questo metodo è leakage-free solo quando chiamato sullo stesso DataFrame
-        utilizzato in fit(). Per dataset diversi, utilizza predizioni standard
-        che possono introdurre data leakage se utilizzate impropriamente.
-        """
-        check_is_fitted(self, "models_")
-
-        # Verifica se è lo stesso dataset utilizzato in fit()
-        current_hash = self._compute_dataframe_hash(X)
-        if current_hash == self.training_data_hash_:
-            # Stesso dataset: restituisci i residui leakage-free calcolati in fit()
-            return self.train_residuals_
-
-        # Dataset diverso: calcola residui standard (non leakage-free)
-        X_env = X[self.env_cols]
-        res = np.column_stack(
-            [
-                X[col].to_numpy() - self.models_[col].predict(X_env)
-                for col in self.ind_cols
-            ]
-        )
-        return res.astype(float)
-
-    # ----------------------------------------------------------------- #
-    # Fit-Transform
-    # ----------------------------------------------------------------- #
-    def fit_transform(self, X: pd.DataFrame, y=None):
-        """
-        Wrapper: fit + restituzione dei residui di training leakage-free.
-
-        Equivalente a fit(X).train_residuals_ ma più conciso.
-        I residui restituiti possono contenere NaN se la strategia OOB
-        non genera predizioni per tutte le osservazioni.
-        """
-        return self.fit(X).train_residuals_
-
-    # ----------------------------------------------------------------- #
-    # Bayesian search helper
-    # ----------------------------------------------------------------- #
-    def _bayesian_search(
-            self, X_env: pd.DataFrame, y_ind: pd.Series
-    ) -> Dict[str, int]:
+    def _bayesian_search(self, X_env: pd.DataFrame, y_ind: pd.Series) -> Dict[str, int]:
         """Restituisce i best_params trovati con BayesSearchCV."""
         rf = RandomForestRegressor(random_state=self.random_state, n_jobs=-1)
         opt = BayesSearchCV(
@@ -278,3 +123,77 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
             verbose=0,
         ).fit(X_env, y_ind)
         return opt.best_params_
+
+    def fit(self, X: pd.DataFrame, y=None) -> "ResidualGenerator":
+        """Addestra le RF usando la strategia selezionata."""
+
+        self.models_: Dict[str, object] = {}
+        self.best_params_: Dict[str, Dict] = {}
+        train_residuals: List[np.ndarray] = []
+
+        self.training_data_hash_ = self._compute_dataframe_hash(X)
+        X_env = X[self.env_cols]
+
+        # Prepara CV splitter se necessario
+        cv_splitter = None
+        if self.strategy == "kfold":
+            cv_splitter = KFold(
+                n_splits=self.kfold_splits,
+                shuffle=True,
+                random_state=self.random_state
+            )
+
+        # Seleziona la strategia
+        strategy_impl = self._strategies[self.strategy]
+        rf_config = self._get_rf_config(self.strategy)
+
+        for col in self.ind_cols:
+            y_ind = X[col]
+
+            # Ottieni parametri RF
+            params = (
+                self._bayesian_search(X_env, y_ind)
+                if self.bayes_search
+                else self.rf_params
+            )
+
+            # Crea RF con configurazione appropriata
+            rf = RandomForestRegressor(
+                random_state=self.random_state,
+                n_jobs=-1,
+                **rf_config,
+                **params,
+            )
+
+            # Usa la strategia per ottenere predizioni
+            rf_fit, preds = strategy_impl.get_predictions(rf, X_env, y_ind, cv_splitter)
+
+            # Salva risultati
+            self.models_[col] = rf_fit
+            self.best_params_[col] = params
+            train_residuals.append((y_ind - preds).to_numpy())
+
+        self.train_residuals_ = np.column_stack(train_residuals).astype(float)
+        return self
+
+    def transform(self, X: pd.DataFrame) -> np.ndarray:
+        """Calcola la matrice residui per il DataFrame X."""
+        check_is_fitted(self, "models_")
+
+        current_hash = self._compute_dataframe_hash(X)
+        if current_hash == self.training_data_hash_:
+            return self.train_residuals_
+
+        X_env = X[self.env_cols]
+        res = np.column_stack(
+            [
+                X[col].to_numpy() - self.models_[col].predict(X_env)
+                for col in self.ind_cols
+            ]
+        )
+        return res.astype(float)
+
+    def fit_transform(self, X: pd.DataFrame, y=None):
+        """Wrapper: fit + restituzione dei residui di training."""
+        return self.fit(X).train_residuals_
+
