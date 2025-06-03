@@ -43,7 +43,6 @@ class NoneStrategy:
     def get_predictions(self, rf: RandomForestRegressor, X_env: pd.DataFrame,
                         y_ind: pd.Series, cv_splitter=None) -> tuple[RandomForestRegressor, np.ndarray]:
         rf_fit = rf.fit(X_env, y_ind)
-        # Restituisce predizioni standard (con potenziale leakage)
         preds = rf_fit.predict(X_env)
         return rf_fit, preds
 
@@ -205,4 +204,4 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
            e restituisce gli stessi residui (senza ricalcolarli)
         """
         self.fit(X, y)
-        return self.transform(X)  # ⇐ usa l’hash
+        return self.transform(X)

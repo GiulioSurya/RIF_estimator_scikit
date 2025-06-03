@@ -95,6 +95,31 @@ scores = rif.decision_function(X_test)
 
 ---
 
+## 🗂️ Contextual vs Behavioural variables
+
+| Term                                                   | Meaning                                                                                                                                                  | Example                                                             |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **Environmental / Contextual variables**<br>`env_cols` | Features that describe the *context* in which the system operates. They are **explanatory inputs** for the regression step.                              | *Temperature*, *work‑load*, *incoming traffic*, *ambient humidity*. |
+| **Behavioural / Indicator variables**<br>`ind_cols`    | Signals that quantify the system’s *behaviour* and are the **targets** of the regression. Deviations from their expected value flag potential anomalies. | *Energy consumption*, *CPU usage*, *response time*.                 |
+
+**Example**
+Imagine a data‑centre server:
+
+```text
+env_cols = [
+    "ambient_temp",     # °C, measured by room sensors
+    "cpu_load",         # %
+    "network_in",       # Mbps incoming
+]
+ind_cols = [
+    "power_draw"        # Watts absorbed by the server
+]
+```
+
+`ResidualGenerator` learns *power\_draw ≈ f(temp, load, net)*; any large residual suggests abnormal power behaviour given the current context.
+
+---
+
 ## 🛠️ Feature highlights
 
 * **Scikit‑learn API** (`fit`, `predict`, `decision_function`)
@@ -104,3 +129,47 @@ scores = rif.decision_function(X_test)
 * **Hash‑based cache** – avoids recomputing residuals when the same DataFrame is passed to `transform()`.
 
 ---
+
+## 📈 Best practices
+
+| What                                                                       | Why                                                                   |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| **Standardise residuals** (e.g. `StandardScaler`) before passing to RIF    | Residual scale varies across datasets; stabilises the IF threshold.   |
+| **Calibrate `contamination`** on a labelled validation set or via PR‑curve | Default 0.10/0.20 may be sub‑optimal when anomaly prevalence changes. |
+| **Use leakage‑free strategies in production**                              | Ensures train/test consistency; results less dataset‑dependent.       |
+
+---
+
+## 🧪 Typical use‑cases
+
+* Industrial condition monitoring
+* Smart‑grid energy analytics
+* Environmental sensor networks
+* Behavioural modelling with covariates
+
+---
+
+## 📚 References
+
+* Song et al., "Conditional Anomaly Detection" (2007)
+* Calikus et al., "ConQuest: Contextual Anomaly Detection" (2020)
+
+---
+
+## 📜 License
+
+**RIF End‑User License Agreement (RIF‑EULA)**
+
+You are granted a **non‑exclusive, non‑transferable** right to **use** this software for internal research, experimentation, or educational purposes.
+
+You may **NOT**:
+
+* redistribute or sublicense the source code or binaries,
+* modify the source code and distribute the modified version,
+* incorporate the software into proprietary products for commercial sale,
+* claim ownership or remove copyright notices,
+* hold the author liable for any direct or indirect damage arising from the use of the software.
+
+For any use beyond the rights explicitly granted above, you must obtain prior written permission from the author.
+
+Copyright © 2025 Giulio Surya Lo Verde. **All Rights Reserved.**
