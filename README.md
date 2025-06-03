@@ -156,20 +156,4 @@ ind_cols = [
 
 ---
 
-## 📜 License
 
-**RIF End‑User License Agreement (RIF‑EULA)**
-
-You are granted a **non‑exclusive, non‑transferable** right to **use** this software for internal research, experimentation, or educational purposes.
-
-You may **NOT**:
-
-* redistribute or sublicense the source code or binaries,
-* modify the source code and distribute the modified version,
-* incorporate the software into proprietary products for commercial sale,
-* claim ownership or remove copyright notices,
-* hold the author liable for any direct or indirect damage arising from the use of the software.
-
-For any use beyond the rights explicitly granted above, you must obtain prior written permission from the author.
-
-Copyright © 2025 Giulio Surya Lo Verde. **All Rights Reserved.**
