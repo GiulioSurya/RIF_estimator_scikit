@@ -128,32 +128,3 @@ ind_cols = [
 * **Multi‑output ready** (multiple behavioural `Y`)
 * **Hash‑based cache** – avoids recomputing residuals when the same DataFrame is passed to `transform()`.
 
----
-
-## 📈 Best practices
-
-| What                                                                       | Why                                                                   |
-| -------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| **Standardise residuals** (e.g. `StandardScaler`) before passing to RIF    | Residual scale varies across datasets; stabilises the IF threshold.   |
-| **Calibrate `contamination`** on a labelled validation set or via PR‑curve | Default 0.10/0.20 may be sub‑optimal when anomaly prevalence changes. |
-| **Use leakage‑free strategies in production**                              | Ensures train/test consistency; results less dataset‑dependent.       |
-
----
-
-## 🧪 Typical use‑cases
-
-* Industrial condition monitoring
-* Smart‑grid energy analytics
-* Environmental sensor networks
-* Behavioural modelling with covariates
-
----
-
-## 📚 References
-
-* Song et al., "Conditional Anomaly Detection" (2007)
-* Calikus et al., "ConQuest: Contextual Anomaly Detection" (2020)
-
----
-
-
