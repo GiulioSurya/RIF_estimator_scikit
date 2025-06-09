@@ -1,14 +1,15 @@
 from typing import Sequence, Dict, Optional, List
 import numpy as np
 import pandas as pd
-import hashlib
-from sklearn.base import BaseEstimator, TransformerMixin
+from skopt import BayesSearchCV
+from skopt.space import Integer
+from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold, cross_val_predict
 from sklearn.utils.validation import check_is_fitted
 from sklearn.utils import check_random_state
-from skopt import BayesSearchCV
-from skopt.space import Integer
+from functools import partial
+
 
 _DEFAULT_RF_SPACE: Dict[str, Integer] = {
     "n_estimators": Integer(100, 500),
@@ -17,62 +18,56 @@ _DEFAULT_RF_SPACE: Dict[str, Integer] = {
     "min_samples_leaf": Integer(1, 10),
 }
 
-
-class OOBStrategy:
-    """Strategia Out-Of-Bag."""
-
-    def get_predictions(self, rf: RandomForestRegressor, X_env: pd.DataFrame,
-                        y_ind: pd.Series, cv_splitter=None) -> tuple[RandomForestRegressor, np.ndarray]:
-        rf_fit = rf.fit(X_env, y_ind)
-        return rf_fit, rf_fit.oob_prediction_
+# def hash_df(df: pd.DataFrame) -> str:
+#     """Create a unique hash for a DataFrame's content."""
+#     return hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()
 
 
-class KFoldStrategy:
-    """Strategia K-Fold Cross Validation."""
-
-    def get_predictions(self, rf: RandomForestRegressor, X_env: pd.DataFrame,
-                        y_ind: pd.Series, cv_splitter) -> tuple[RandomForestRegressor, np.ndarray]:
-        preds = cross_val_predict(rf, X_env, y_ind, cv=cv_splitter, n_jobs=-1)
-        rf_fit = rf.fit(X_env, y_ind)
-        return rf_fit, preds
-
-
-class NoneStrategy:
-    """Strategia semplice: solo fit, nessuna predizione leakage-free."""
-
-    def get_predictions(self, rf: RandomForestRegressor, X_env: pd.DataFrame,
-                        y_ind: pd.Series, cv_splitter=None) -> tuple[RandomForestRegressor, np.ndarray]:
-        rf_fit = rf.fit(X_env, y_ind)
-        preds = rf_fit.predict(X_env)
-        return rf_fit, preds
 
 
 class ResidualGenerator(BaseEstimator, TransformerMixin):
-    """
-    ResidualGenerator con Strategy Pattern
-    -------------------------------------
-    Supporta tre strategie:
-    - "oob": Out-Of-Bag predictions (leakage-free ma può avere NaN)
-    - "kfold": K-fold cross-validation (leakage-free, più lento)
-    - "none": Predizioni standard (veloce ma con potenziale data leakage)
+    """Generate leakage‑free residuals for a set of target columns.
+
+    Parameters
+    ----------
+    ind_cols : Sequence[str]
+        Columns whose residuals are required.
+    env_cols : Sequence[str]
+        Contextual (environment) columns used as regressors.
+    strategy : {"oob", "kfold", None}, default="oob"
+        * ``"oob"``   – out‑of‑bag predictions (fast, may contain NaN).
+        * ``"kfold"`` – K‑fold CV predictions (slower, no NaN).
+        * ``None``    – plain ``model.predict`` (cheap but leaky).
+    kfold_splits : int, default=5
+        Number of folds when *strategy* is "kfold".
+    bayes_search : bool, default=False
+        Whether to perform a Bayesian hyper‑parameter search.
+    bayes_iter, bayes_cv : int, default=3
+        Iterations / CV folds for :class:`BayesSearchCV`.
+    search_space : dict[str, skopt.space.Dimension] | None, default=None
+        Custom RF search space.  Falls back to ``_DEFAULT_RF_SPACE``.
+    rf_params : dict | None, default=None
+        Extra keyword args for :class:`RandomForestRegressor`.
+    random_state : int | None, default=None
+        Global random state.
     """
 
     def __init__(
-            self,
-            ind_cols: Sequence[str],
-            env_cols: Sequence[str],
-            *,
-            strategy: str = None,
-            kfold_splits: int = 5,
-            bayes_search: bool = False,
-            bayes_iter: int = 3,
-            bayes_cv: int = 3,
-            search_space: Optional[Dict[str, Integer]] = None,
-            rf_params: Optional[Dict] = None,
-            random_state: Optional[int] = None,
-    ):
+        self,
+        ind_cols: Sequence[str],
+        env_cols: Sequence[str],
+        *,
+        strategy: str | None = "oob",
+        kfold_splits: int = 5,
+        bayes_search: bool = False,
+        bayes_iter: int = 3,
+        bayes_cv: int = 3,
+        search_space: Optional[Dict[str, Integer]] = None,
+        rf_params: Optional[Dict] = None,
+        random_state: Optional[int] = None,
+    ) -> None:
         if strategy not in {"oob", "kfold", None}:
-            raise ValueError("strategy must be 'oob', 'kfold', or None")
+            raise ValueError("strategy must be 'oob', 'kfold' or None")
 
         self.ind_cols = list(ind_cols)
         self.env_cols = list(env_cols)
@@ -85,31 +80,27 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         self.rf_params = rf_params or {}
         self.random_state = check_random_state(random_state)
 
-        # Strategy pattern
-        self._strategies = {
-            "oob": OOBStrategy(),
-            "kfold": KFoldStrategy(),
-            None: NoneStrategy()
-        }
+        # Internal attributes filled during fit ----------------------------
+        self.models_: Dict[str, RandomForestRegressor]
+        self.best_params_: Dict[str, Dict]
+        self._training_data_id_: int
+        self._residual_cache_: Dict[int, np.ndarray] = {}
 
-    def _get_rf_config(self, strategy: str) -> dict:
-        """Restituisce la configurazione RF per la strategia."""
-        configs = {
+
+    @staticmethod
+    def _get_rf_config(strategy: str | None) -> dict:
+        """Return additional RF keyword args depending on *strategy*."""
+        return {
             "oob": {"oob_score": True, "bootstrap": True},
             "kfold": {"oob_score": False, "bootstrap": False},
-            None: {"oob_score": False, "bootstrap": False}
-        }
-        return configs[strategy]
+            None: {"oob_score": False, "bootstrap": False},
+        }[strategy]
 
-    def _compute_dataframe_hash(self, X: pd.DataFrame) -> str:
-        """Calcola un hash MD5 del DataFrame per identificarlo univocamente."""
-        relevant_cols = self.ind_cols + self.env_cols
-        X_relevant = X[relevant_cols]
-        data_bytes = pd.util.hash_pandas_object(X_relevant, index=True).values.tobytes()
-        return hashlib.md5(data_bytes).hexdigest()
 
-    def _bayesian_search(self, X_env: pd.DataFrame, y_ind: pd.Series) -> Dict[str, int]:
-        """Restituisce i best_params trovati con BayesSearchCV."""
+    def _bayesian_search(
+        self, X_env: pd.DataFrame, y_ind: pd.Series
+    ) -> Dict[str, int]:
+        """Run BayesSearchCV and return the best parameters found."""
         rf = RandomForestRegressor(random_state=self.random_state, n_jobs=-1)
         opt = BayesSearchCV(
             rf,
@@ -119,89 +110,95 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
             n_jobs=-1,
             random_state=self.random_state,
             scoring="neg_mean_squared_error",
-            verbose=1,
+            verbose=0,
         ).fit(X_env, y_ind)
         return opt.best_params_
 
+    def _get_prediction_oob(self, model):
+        return model.oob_prediction_
+
+    def _get_prediction_kfold(self, model, X_env, y_col):
+        cv = KFold(
+            n_splits=self.kfold_splits,
+            shuffle=True,
+            random_state=self.random_state,
+        )
+        return cross_val_predict(clone(model), X_env, y_col, cv=cv, n_jobs=-1)
+
+    def _get_prediction_none(self, model, X_env):
+        return model.predict(X_env)
+
+
     def fit(self, X: pd.DataFrame, y=None) -> "ResidualGenerator":
-        """Addestra le RF usando la strategia selezionata."""
+        """Train one Random‑Forest per *independent* column."""
+        self.models_ = {}
+        self.best_params_ = {}
 
-        self.models_: Dict[str, object] = {}
-        self.best_params_: Dict[str, Dict] = {}
-        train_residuals: List[np.ndarray] = []
+        self._training_data_id_ = id(X)
 
-        self.training_data_hash_ = self._compute_dataframe_hash(X)
         X_env = X[self.env_cols]
-
-        # Prepara CV splitter se necessario
-        cv_splitter = None
-        if self.strategy == "kfold":
-            cv_splitter = KFold(
-                n_splits=self.kfold_splits,
-                shuffle=True,
-                random_state=self.random_state
-            )
-
-        # Seleziona la strategia
-        strategy_impl = self._strategies[self.strategy]
-        rf_config = self._get_rf_config(self.strategy)
 
         for col in self.ind_cols:
             y_ind = X[col]
 
-            # Ottieni parametri RF
+            # Optional hyper‑parameter search
             params = (
                 self._bayesian_search(X_env, y_ind)
                 if self.bayes_search
                 else self.rf_params
             )
 
-            # Crea RF con configurazione appropriata
             rf = RandomForestRegressor(
                 random_state=self.random_state,
                 n_jobs=-1,
-                **rf_config,
+                **self._get_rf_config(self.strategy),
                 **params,
             )
+            rf.fit(X_env, y_ind)
 
-            # Usa la strategia per ottenere predizioni
-            rf_fit, preds = strategy_impl.get_predictions(rf, X_env, y_ind, cv_splitter)
-
-            # Salva risultati
-            self.models_[col] = rf_fit
+            self.models_[col] = rf
             self.best_params_[col] = params
-            train_residuals.append((y_ind - preds).to_numpy())
 
-        self.train_residuals_ = np.column_stack(train_residuals).astype(float)
+        # Reset cache (useful when refitting inside a pipeline)
+        self._residual_cache_.clear()
+
         return self
 
     def transform(self, X: pd.DataFrame) -> np.ndarray:
-        """Calcola la matrice residui per il DataFrame X."""
+        """Return the residual matrix for X .
+
+        Results are cached by DataFrame *identity* so subsequent calls with
+        the **same object** are O(1).
+        """
         check_is_fitted(self, "models_")
 
-        current_hash = self._compute_dataframe_hash(X)
-        if current_hash == self.training_data_hash_:
-            return self.train_residuals_
+        key = id(X)
+        #a.equals(b)
+
+        if key in self._residual_cache_:
+            return self._residual_cache_[key]
 
         X_env = X[self.env_cols]
-        res = np.column_stack(
-            [
-                X[col].to_numpy() - self.models_[col].predict(X_env)
-                for col in self.ind_cols
-            ]
-        )
-        return res.astype(float)
+        residuals: List[np.ndarray] = []
+        is_training_set = key == getattr(self, "_training_data_id_", -1)
 
-    def fit_transform(self, X: pd.DataFrame, y=None):
-        """
-        Fit + transform, garantendo che i residui restituiti
-        siano ESATTAMENTE quelli che verranno riconsegnati da
-        transform(X) in chiamate successive.
+        for col in self.ind_cols:
+            model = self.models_[col]
+            y_col = X[col]
 
-        In pratica:
-        1. fit() salva train_residuals_ e training_data_hash_
-        2. transform(X) rileva che l'hash coincide
-           e restituisce gli stessi residui (senza ricalcolarli)
-        """
-        self.fit(X, y)
-        return self.transform(X)
+            # per domani, questo proviamo ad eliminarlo e faro con dizionario + metodi per il predict
+            if is_training_set:
+                preds = {
+                    "oob": partial(self._get_prediction_oob,model),
+                    "kfold": partial(self._get_prediction_kfold, model, X_env, y_col),
+                    None: partial(self._get_prediction_none,model, X_env)
+                }[self.strategy]()
+
+            else:
+                # Standard prediction for *new* data -------------------
+                preds = model.predict(X_env)
+
+            residuals.append(y_col.to_numpy() - preds)
+
+        self._residual_cache_[key] = np.column_stack(residuals).astype(float)
+        return self._residual_cache_[key]
