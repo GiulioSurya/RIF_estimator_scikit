@@ -130,46 +130,7 @@ ind_cols = [
 
 ---
 
-## 📈 Best practices
 
-| What                                                                       | Why                                                                   |
-| -------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| **Standardise residuals** (e.g. `StandardScaler`) before passing to RIF    | Residual scale varies across datasets; stabilises the IF threshold.   |
-| **Calibrate `contamination`** on a labelled validation set or via PR‑curve | Default 0.10/0.20 may be sub‑optimal when anomaly prevalence changes. |
-| **Use leakage‑free strategies in production**                              | Ensures train/test consistency; results less dataset‑dependent.       |
 
----
-
-## 🧪 Typical use‑cases
-
-* Industrial condition monitoring
-* Smart‑grid energy analytics
-* Environmental sensor networks
-* Behavioural modelling with covariates
-
----
-
-## 📚 References
-
-* Song et al., "Conditional Anomaly Detection" (2007)
-* Calikus et al., "ConQuest: Contextual Anomaly Detection" (2020)
-
----
-
-## 📜 License
-
-**RIF End‑User License Agreement (RIF‑EULA)**
-
-You are granted a **non‑exclusive, non‑transferable** right to **use** this software for internal research, experimentation, or educational purposes.
-
-You may **NOT**:
-
-* redistribute or sublicense the source code or binaries,
-* modify the source code and distribute the modified version,
-* incorporate the software into proprietary products for commercial sale,
-* claim ownership or remove copyright notices,
-* hold the author liable for any direct or indirect damage arising from the use of the software.
-
-For any use beyond the rights explicitly granted above, you must obtain prior written permission from the author.
-
-Copyright © 2025 Giulio Surya Lo Verde. **All Rights Reserved.**
+## License
+This project is licensed under the MIT License – see the [LICENSE](LICENSE) file for details.
