@@ -214,4 +214,4 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         self._residual_cache_[key] = np.column_stack(residuals).astype(float)
         return self._residual_cache_[key]
 
-        #return np.column_stack(residuals).astype(float)
+git
