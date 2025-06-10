@@ -6,7 +6,7 @@ from skopt.space import Integer
 from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold, cross_val_predict
-from sklearn.utils.validation import check_is_fitted
+from sklearn.utils.validation import check_is_fitted, assert_all_finite
 from sklearn.utils import check_random_state
 from functools import partial
 
@@ -114,8 +114,24 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         ).fit(X_env, y_ind)
         return opt.best_params_
 
+    def _fit_single_model(self, X_env: pd.DataFrame, y_ind: pd.Series, params: dict) -> RandomForestRegressor.fit:
+        """Fit a single RandomForest model - this method will be cached."""
+        rf = RandomForestRegressor(
+            random_state=self.random_state,
+            n_jobs=-1,
+            **self._get_rf_config(self.strategy),
+            **params,
+        )
+        return rf.fit(X_env, y_ind)
+
     def _get_prediction_oob(self, model):
-        return model.oob_prediction_
+        residuals = model.oob_prediction_
+        try:
+            assert_all_finite(residuals)
+        except ValueError:
+            print("Warning: OOB predictions contain NaN. Residuals will still be computed, "
+                  "but it is recommended to use strategy='kfold' instead of 'oob' to avoid this issue.")
+        return residuals
 
     def _get_prediction_kfold(self, model, X_env, y_col):
         cv = KFold(
@@ -127,6 +143,8 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
 
     def _get_prediction_none(self, model, X_env):
         return model.predict(X_env)
+
+
 
 
     def fit(self, X: pd.DataFrame, y=None) -> "ResidualGenerator":
@@ -148,15 +166,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
                 else self.rf_params
             )
 
-            rf = RandomForestRegressor(
-                random_state=self.random_state,
-                n_jobs=-1,
-                **self._get_rf_config(self.strategy),
-                **params,
-            )
-            rf.fit(X_env, y_ind)
-
-            self.models_[col] = rf
+            self.models_[col] = self._fit_single_model(X_env, y_ind, params)
             self.best_params_[col] = params
 
         # Reset cache (useful when refitting inside a pipeline)
@@ -173,6 +183,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         check_is_fitted(self, "models_")
 
         key = id(X)
+
         #a.equals(b)
 
         if key in self._residual_cache_:
@@ -202,3 +213,5 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
 
         self._residual_cache_[key] = np.column_stack(residuals).astype(float)
         return self._residual_cache_[key]
+
+        #return np.column_stack(residuals).astype(float)
