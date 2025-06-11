@@ -1,4 +1,4 @@
-from typing import Sequence, Dict, Optional
+from typing import Sequence, Dict, Optional, Union
 import numpy as np
 import pandas as pd
 from skopt.space import Integer
@@ -20,10 +20,12 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
     Parameters
     ----------
-    ind_cols : Sequence[str]
-        Names of the columns representing individual (behavioral) features.
-    env_cols : Sequence[str]
+    ind_cols : Sequence[str] or Dict[str, Sequence[str]]
+        If Sequence: Names of the columns representing individual (behavioral) features.
+        If Dict: Mapping from target column to its specific environmental columns.
+    env_cols : Sequence[str], optional
         Names of the columns representing contextual (environmental) features.
+        Used for all ind_cols if ind_cols is a sequence. Ignored if ind_cols is a dict.
     contamination : float, default=0.10
         The expected proportion of anomalies in the dataset, used by Isolation Forest.
     residual_strategy : {'oob', 'kfold', 'None'}, optional
@@ -54,19 +56,19 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
     """
 
     def __init__(
-        self,
-        ind_cols: Sequence[str],
-        env_cols: Sequence[str],
-        *,
-        contamination: float = 0.10,
-        residual_strategy: str | None = "oob",
-        bayes_search: bool = False,
-        bayes_iter: int = 3,
-        bayes_cv: int = 3,
-        rf_search_space: Optional[Dict[str, Integer]] = None,
-        rf_params: Optional[Dict] = None,
-        iso_params: Optional[Dict] = None,
-        random_state: Optional[int] = None,
+            self,
+            ind_cols: Union[Sequence[str], Dict[str, Sequence[str]]],
+            env_cols: Optional[Sequence[str]] = None,
+            *,
+            contamination: float = 0.10,
+            residual_strategy: str | None = "oob",
+            bayes_search: bool = False,
+            bayes_iter: int = 3,
+            bayes_cv: int = 3,
+            rf_search_space: Optional[Dict[str, Integer]] = None,
+            rf_params: Optional[Dict] = None,
+            iso_params: Optional[Dict] = None,
+            random_state: Optional[int] = None,
     ) -> None:
         self.generator = ResidualGenerator(
             ind_cols=ind_cols,
@@ -152,6 +154,16 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         res = self.generator.transform(X)
         return self.if_.decision_function(res)
 
+    def get_feature_mapping(self) -> Dict[str, list]:
+        """
+        Return the mapping of target columns to their environmental features.
+
+        Returns
+        -------
+        dict
+            Mapping from target column names to lists of environmental feature names.
+        """
+        return self.generator.get_feature_mapping()
 # if __name__ == "__main__":
 #     from sklearn.model_selection import train_test_split
 #     from sklearn.metrics import accuracy_score, recall_score, confusion_matrix
@@ -177,10 +189,12 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 #         contamination=0.20,
 #         random_state=42,
 #         residual_strategy="oob",
-#         bayes_search=True,
+#         bayes_search=False,
 #         iso_params={"max_features": 1}
 #     )
 #     rif.fit(X_train)
+#
+#
 #
 #     splits = zip([X_train, X_test], [y_train, y_test])
 #
@@ -212,7 +226,7 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 #         print(f"Recall   : {rec_iso:.3f}")
 #         print("Confusion matrix:\n", cm_iso)
 # ########################
-#
+
 # if __name__ == "__main__":
 #
 #     import numpy as np
@@ -286,61 +300,64 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 #
 
 if __name__ == "__main__":
-    import numpy as np
-    import pandas as pd
-    from sklearn.model_selection import train_test_split
     from sklearn.metrics import accuracy_score, recall_score, confusion_matrix
+    from sklearn.preprocessing import StandardScaler
 
-    env_cols = ["year", "month", "day", "latitude", "longitude"]
-    ind_cols = ["zon_winds", "mer_winds", "humidity", "air_temp", "ss_temp"]
+    df = pd.read_csv(r"C:\Users\loverdegiulio\Desktop\test.csv")
 
-    prepared_df = pd.read_csv(r"C:\Users\loverdegiulio\PycharmProjects\tesi\datas\elnino_prepared.csv")
+    ENV_COLS = ["disk_busy", "rate_receive_lo", "rate_transmit_lo", "rate_receive_ens33", "rate_transmit_ens33", "hour"]
+    IND_COLS = ["cpu_busy", "ram_busy", "swap_busy"]
 
-    # Target e feature set
-    y = prepared_df["is_anomaly"].to_numpy()
-    X = prepared_df.drop(columns=["is_anomaly", "is_outlier"])
+    y = df["is_anomaly"].to_numpy()
 
-    # Train-test split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=0.30,
-        random_state=42,
-    )
+    X = df.drop(columns=["is_anomaly", "date"])
 
-    # Residual Isolation Forest
+    # Feature da standardizzare
+    feature_cols = ENV_COLS + IND_COLS
+    X_raw = df[feature_cols]
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_raw)
+    X_scaled_df = pd.DataFrame(X_scaled, columns=feature_cols)
+    #X_scaled_df["date"] = df["date"]
+    X_scaled_df["hour"] = df["hour"]
+
+    feature_mapping = {
+        "cpu_busy": ["rate_receive_lo", "rate_transmit_lo", "rate_receive_ens33", "rate_transmit_ens33", "ram_busy", "swap_busy", "hour"],
+        "ram_busy": ["rate_receive_lo", "rate_transmit_lo", "rate_receive_ens33", "rate_transmit_ens33", "hour"],
+        "swap_busy":["rate_receive_lo", "rate_transmit_lo", "rate_receive_ens33", "rate_transmit_ens33", "ram_busy", "hour"]
+
+    }
+
+
     rif = ResidualIsolationForest(
-        ind_cols=ind_cols,
-        env_cols=env_cols,
-        contamination=0.10,
+        ind_cols=IND_COLS,
+        env_cols=ENV_COLS,
+        contamination=0.009,
         random_state=42,
-        residual_strategy="kfold",
-        bayes_search=False,
+        residual_strategy="oob",
+        bayes_search=True,
         iso_params={"max_features": 1}
     )
-    rif.fit(X_train)
+    rif.fit(X_scaled_df)
 
-    y_pred_rif = np.where(rif.predict(X_test) == -1, 1, 0)
-    acc_rif = accuracy_score(y_test, y_pred_rif)
-    rec_rif = recall_score(y_test, y_pred_rif)
-    cm_rif = confusion_matrix(y_test, y_pred_rif)
-
+    y_pred_rif = np.where(rif.predict(X_scaled_df) == -1, 1, 0)
+    acc_rif = accuracy_score(y, y_pred_rif)
+    rec_rif = recall_score(y, y_pred_rif)
+    cm_rif = confusion_matrix(y, y_pred_rif)
     print("=== Residual Isolation Forest ===")
     print(f"Accuracy : {acc_rif:.3f}")
     print(f"Recall   : {rec_rif:.3f}")
     print("Confusion matrix:\n", cm_rif)
-
     # Isolation Forest vanilla
     iso = IsolationForest(
-        contamination=0.10,
+        contamination=0.009,
         random_state=42,
         max_features=1
-    ).fit(X_train)
-
-    iso_pred = np.where(iso.predict(X_test) == -1, 1, 0)
-    acc_iso = accuracy_score(y_test, iso_pred)
-    rec_iso = recall_score(y_test, iso_pred)
-    cm_iso = confusion_matrix(y_test, iso_pred)
-
+    ).fit(X_scaled_df)
+    iso_pred = np.where(iso.predict(X_scaled_df) == -1, 1, 0)
+    acc_iso = accuracy_score(y, iso_pred)
+    rec_iso = recall_score(y, iso_pred)
+    cm_iso = confusion_matrix(y, iso_pred)
     print("\n=== Isolation Forest (vanilla) ===")
     print(f"Accuracy : {acc_iso:.3f}")
     print(f"Recall   : {rec_iso:.3f}")

@@ -1,4 +1,4 @@
-from typing import Sequence, Dict, Optional, List
+from typing import Sequence, Dict, Optional, List, Tuple, Union
 import numpy as np
 import pandas as pd
 from skopt import BayesSearchCV
@@ -9,7 +9,8 @@ from sklearn.model_selection import KFold, cross_val_predict
 from sklearn.utils.validation import check_is_fitted, assert_all_finite
 from sklearn.utils import check_random_state
 from functools import partial
-
+import warnings
+from _df_fingerprint import DataFrameFingerprint
 
 _DEFAULT_RF_SPACE: Dict[str, Integer] = {
     "n_estimators": Integer(100, 500),
@@ -18,22 +19,18 @@ _DEFAULT_RF_SPACE: Dict[str, Integer] = {
     "min_samples_leaf": Integer(1, 10),
 }
 
-# def hash_df(df: pd.DataFrame) -> str:
-#     """Create a unique hash for a DataFrame's content."""
-#     return hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()
-
-
-
 
 class ResidualGenerator(BaseEstimator, TransformerMixin):
     """Generate leakage‑free residuals for a set of target columns.
 
     Parameters
     ----------
-    ind_cols : Sequence[str]
-        Columns whose residuals are required.
-    env_cols : Sequence[str]
-        Contextual (environment) columns used as regressors.
+    ind_cols : Sequence[str] or Dict[str, Sequence[str]]
+        If Sequence: columns whose residuals are required.
+        If Dict: mapping from target column to its specific environmental columns.
+    env_cols : Sequence[str], optional
+        Contextual (environment) columns used as regressors for all ind_cols.
+        Ignored if ind_cols is a dictionary.
     strategy : {"oob", "kfold", None}, default="oob"
         * ``"oob"``   – out‑of‑bag predictions (fast, may contain NaN).
         * ``"kfold"`` – K‑fold CV predictions (slower, no NaN).
@@ -53,24 +50,39 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
     """
 
     def __init__(
-        self,
-        ind_cols: Sequence[str],
-        env_cols: Sequence[str],
-        *,
-        strategy: str | None = "oob",
-        kfold_splits: int = 5,
-        bayes_search: bool = False,
-        bayes_iter: int = 3,
-        bayes_cv: int = 3,
-        search_space: Optional[Dict[str, Integer]] = None,
-        rf_params: Optional[Dict] = None,
-        random_state: Optional[int] = None,
+            self,
+            ind_cols: Union[Sequence[str], Dict[str, Sequence[str]]],
+            env_cols: Optional[Sequence[str]] = None,
+            *,
+            strategy: str | None = "oob",
+            kfold_splits: int = 5,
+            bayes_search: bool = False,
+            bayes_iter: int = 3,
+            bayes_cv: int = 3,
+            search_space: Optional[Dict[str, Integer]] = None,
+            rf_params: Optional[Dict] = None,
+            random_state: Optional[int] = None,
     ) -> None:
         if strategy not in {"oob", "kfold", None}:
             raise ValueError("strategy must be 'oob', 'kfold' or None")
 
-        self.ind_cols = list(ind_cols)
-        self.env_cols = list(env_cols)
+        # Gestisce sia il caso di lista che di dizionario
+        if isinstance(ind_cols, dict):
+            self.ind_cols_dict = {k: list(v) for k, v in ind_cols.items()}
+            self.ind_cols = list(ind_cols.keys())
+            if env_cols is not None:
+                warnings.warn(
+                    "env_cols parameter is ignored when ind_cols is a dictionary. "
+                    "Use the dictionary values to specify environmental columns for each target.",
+                    UserWarning
+                )
+        else:
+            if env_cols is None:
+                raise ValueError("env_cols must be provided when ind_cols is a sequence")
+            self.ind_cols = list(ind_cols)
+            self.ind_cols_dict = {col: list(env_cols) for col in self.ind_cols}
+
+        self.env_cols = env_cols  # Mantenuto per compatibilità
         self.strategy = strategy
         self.kfold_splits = kfold_splits
         self.bayes_search = bayes_search
@@ -83,9 +95,8 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         # Internal attributes filled during fit ----------------------------
         self.models_: Dict[str, RandomForestRegressor]
         self.best_params_: Dict[str, Dict]
-        self._training_data_id_: int
+        self._training_data_fingerprint_: DataFrameFingerprint
         self._residual_cache_: Dict[int, np.ndarray] = {}
-
 
     @staticmethod
     def _get_rf_config(strategy: str | None) -> dict:
@@ -96,9 +107,8 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
             None: {"oob_score": False, "bootstrap": False},
         }[strategy]
 
-
     def _bayesian_search(
-        self, X_env: pd.DataFrame, y_ind: pd.Series
+            self, X_env: pd.DataFrame, y_ind: pd.Series
     ) -> Dict[str, int]:
         """Run BayesSearchCV and return the best parameters found."""
         rf = RandomForestRegressor(random_state=self.random_state, n_jobs=-1)
@@ -114,7 +124,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         ).fit(X_env, y_ind)
         return opt.best_params_
 
-    def _fit_single_model(self, X_env: pd.DataFrame, y_ind: pd.Series, params: dict) -> RandomForestRegressor.fit:
+    def _fit_single_model(self, X_env: pd.DataFrame, y_ind: pd.Series, params: dict) -> RandomForestRegressor:
         """Fit a single RandomForest model - this method will be cached."""
         rf = RandomForestRegressor(
             random_state=self.random_state,
@@ -144,19 +154,18 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
     def _get_prediction_none(self, model, X_env):
         return model.predict(X_env)
 
-
-
-
     def fit(self, X: pd.DataFrame, y=None) -> "ResidualGenerator":
         """Train one Random‑Forest per *independent* column."""
         self.models_ = {}
         self.best_params_ = {}
 
-        self._training_data_id_ = id(X)
-
-        X_env = X[self.env_cols]
+        # Creo l'impronta digitale del DataFrame di training
+        self._training_data_fingerprint_ = DataFrameFingerprint(X)
 
         for col in self.ind_cols:
+            # Usa le colonne ambientali specifiche per questa colonna target
+            env_cols_for_this_target = self.ind_cols_dict[col]
+            X_env = X[env_cols_for_this_target]
             y_ind = X[col]
 
             # Optional hyper‑parameter search
@@ -177,41 +186,58 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
     def transform(self, X: pd.DataFrame) -> np.ndarray:
         """Return the residual matrix for X .
 
-        Results are cached by DataFrame *identity* so subsequent calls with
-        the **same object** are O(1).
+        Results are cached by DataFrame fingerprint so subsequent calls with
+        DataFrames that have the same structure and content are O(1).
         """
         check_is_fitted(self, "models_")
 
-        key = id(X)
+        # Creo l'impronta digitale del DataFrame corrente
+        current_fingerprint = DataFrameFingerprint(X)
+        fingerprint_hash = hash(current_fingerprint)
 
-        #a.equals(b)
+        # Controllo se i residui sono già in cache
+        if fingerprint_hash in self._residual_cache_:
+            return self._residual_cache_[fingerprint_hash]
 
-        if key in self._residual_cache_:
-            return self._residual_cache_[key]
-
-        X_env = X[self.env_cols]
         residuals: List[np.ndarray] = []
-        is_training_set = key == getattr(self, "_training_data_id_", -1)
+
+        # Verifico se è lo stesso DataFrame usato per il training
+        is_training_set = current_fingerprint == self._training_data_fingerprint_
 
         for col in self.ind_cols:
             model = self.models_[col]
             y_col = X[col]
 
-            # per domani, questo proviamo ad eliminarlo e faro con dizionario + metodi per il predict
-            if is_training_set:
-                preds = {
-                    "oob": partial(self._get_prediction_oob,model),
-                    "kfold": partial(self._get_prediction_kfold, model, X_env, y_col),
-                    None: partial(self._get_prediction_none,model, X_env)
-                }[self.strategy]()
+            # Usa le colonne ambientali specifiche per questa colonna target
+            env_cols_for_this_target = self.ind_cols_dict[col]
+            X_env = X[env_cols_for_this_target]
 
+            if is_training_set:
+                # Uso le predizioni specifiche per il training set (oob/kfold/none)
+                preds = {
+                    "oob": partial(self._get_prediction_oob, model),
+                    "kfold": partial(self._get_prediction_kfold, model, X_env, y_col),
+                    None: partial(self._get_prediction_none, model, X_env)
+                }[self.strategy]()
             else:
-                # Standard prediction for *new* data -------------------
+                if current_fingerprint.matches_structure_only(self._training_data_fingerprint_):
+                    warnings.warn(
+                        "\nThe DataFrame has the same structure (shape, columns, dtypes) as the one used \n "
+                        "during fit. If you are using the same DataFrame but modified (e.g., after reset_index() \n"
+                        "or other changes), you might encounter data leakage. Avoid making structural modifications to \n"
+                        "the DataFrame between fit and predict to ensure the validity of the residuals.",
+                        UserWarning,
+                        stacklevel=2
+                    )
+                # Standard prediction for *new* data
                 preds = model.predict(X_env)
 
             residuals.append(y_col.to_numpy() - preds)
 
-        self._residual_cache_[key] = np.column_stack(residuals).astype(float)
-        return self._residual_cache_[key]
+        # Salvo nella cache usando l'hash dell'impronta digitale
+        self._residual_cache_[fingerprint_hash] = np.column_stack(residuals).astype(float)
+        return self._residual_cache_[fingerprint_hash]
 
-git
+    def get_feature_mapping(self) -> Dict[str, List[str]]:
+        """Return the mapping of target columns to their environmental features."""
+        return self.ind_cols_dict.copy()
