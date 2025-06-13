@@ -1,4 +1,4 @@
-# Residual Isolation Forest (RIF) 🚀
+# Residual Isolation Forest (RIF) 
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![scikit-learn](https://img.shields.io/badge/sklearn-compatible-orange.svg)](https://scikit-learn.org/)
@@ -8,13 +8,13 @@
 
 Residual Isolation Forest (RIF) is a powerful anomaly detection algorithm that combines the best of both worlds: **contextual understanding** and **unsupervised learning**. Instead of treating all deviations as anomalies, RIF first models what's *normal* given the context, then detects anomalies in the unexplained residuals.
 
-## 🎯 Why RIF?
+##  Why RIF?
 
 Traditional anomaly detection methods often produce false alarms because they don't consider *context*. **Contextual anomalies** are data points that appear normal in general but are odd in a specific situation. For example:
 
 - **🏢 Server monitoring**: High CPU usage at 3 AM might be suspicious, but during business hours it's normal
 - **🌡️ Environmental sensors**: A 30°C temperature reading is normal in summer but anomalous in winter
-- **💰 Financial transactions**: A $1000 purchase might be normal for a high-income customer but suspicious for others
+
 
 **RIF addresses this by:**
 1. **Learning context-behavior relationships** using Random Forest regression
@@ -23,7 +23,7 @@ Traditional anomaly detection methods often produce false alarms because they do
 
 ---
 
-## 🔬 How It Works
+##  How It Works
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -40,19 +40,19 @@ Traditional anomaly detection methods often produce false alarms because they do
 
 ### The Two-Stage Process
 
-**Stage 1: Context Modeling** 🧠
+**Stage 1: Context Modeling** 
 - Fits Random Forest models to predict behavioral variables from environmental features
 - Learns patterns like "CPU usage should be high when network traffic is high"
 - Supports different environmental predictors for each behavioral variable
 
-**Stage 2: Anomaly Detection** 🔍  
+**Stage 2: Anomaly Detection**   
 - Computes residuals (actual - predicted behavior)
 - Applies Isolation Forest to identify outliers in residual space
 - Residuals represent "behavior that can't be explained by context"
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Installation
 
@@ -112,7 +112,7 @@ rif = ResidualIsolationForest(
 
 ---
 
-## 🛠️ Key Parameters
+## ️ Key Parameters
 
 ### Core Configuration
 
@@ -122,7 +122,7 @@ rif = ResidualIsolationForest(
 | `env_cols` | **Environmental variables** that explain behavior | Required | Select features that logically influence behavior |
 | `contamination` | Expected proportion of anomalies | `0.10` | Tune based on domain knowledge (0.01-0.2) |
 
-### Residual Strategies 🔑
+### Residual Strategies 
 
 The **most important parameter** for avoiding data leakage:
 
@@ -142,9 +142,9 @@ The **most important parameter** for avoiding data leakage:
 
 ---
 
-## 💡 Real-World Examples
+##  Real-World Examples
 
-### 🖥️ Server Monitoring
+### Server Monitoring
 
 ```python
 # Monitor server performance with context awareness
@@ -158,7 +158,7 @@ server_rif = ResidualIsolationForest(
 # Detects: CPU spikes not explained by user load or time patterns
 ```
 
-### 🌡️ Environmental Monitoring
+###  Environmental Monitoring
 
 ```python
 # Different predictors for different sensors
@@ -174,21 +174,7 @@ env_rif = ResidualIsolationForest(
     residual_strategy='kfold',  # Maximum robustness
     bayes_search=True
 )
-```
 
-### 💰 Financial Fraud Detection
-
-```python
-# Transaction monitoring with customer context
-fraud_rif = ResidualIsolationForest(
-    ind_cols=['transaction_amount', 'transaction_frequency'],
-    env_cols=['customer_income', 'account_age', 'historical_average', 'merchant_category'],
-    contamination=0.01,  # 1% fraud rate
-    residual_strategy='oob'
-)
-
-# Flags: Large transactions unusual for customer profile
-```
 
 ---
 
@@ -233,9 +219,9 @@ for target, model in rif.generator.models_.items():
 
 ---
 
-## ⚡ Performance Tips
+## Performance Tips
 
-### 🚀 Speed Optimization
+### Speed Optimization
 
 ```python
 # For large datasets, prioritize speed
@@ -249,37 +235,75 @@ fast_rif = ResidualIsolationForest(
 )
 ```
 
-### 🎯 Accuracy Optimization
+###  Accuracy Optimization
 
 ```python
 # For critical applications, maximize accuracy
 robust_rif = ResidualIsolationForest(
     ind_cols=IND_COLS,
     env_cols=ENV_COLS,
-    residual_strategy='kfold',   # Most robust
-    kfold_splits=10,            # More CV folds
+    residual_strategy='oob',   
     bayes_search=True,
-    bayes_iter=20,              # Thorough hyperparameter search
+    bayes_iter=10,              # Thorough hyperparameter search
     bayes_cv=5                  # More CV for hyperparameter tuning
 )
-```
 
-### 💾 Memory Optimization
 
+
+## ⚠️ Critical: Data Integrity Warning
+
+> **🚨 IMPORTANT: Avoid Data Leakage When Evaluating on Training Data**
+
+RIF uses **DataFrame fingerprinting** to detect when you're applying the model to the same data used for training. This is crucial for maintaining leakage-free residuals:
+
+### ✅ **Safe Operations** (Preserves fingerprint)
 ```python
-# For memory-constrained environments
-memory_efficient_rif = ResidualIsolationForest(
-    ind_cols=IND_COLS,
-    env_cols=ENV_COLS,
-    residual_strategy='oob',
-    rf_params={'max_depth': 5, 'min_samples_leaf': 10},  # Smaller trees
-    iso_params={'max_samples': 0.5}  # Sample less data
-)
+# Train the model
+rif.fit(X_train)
+
+# These operations are SAFE - fingerprint remains valid
+predictions = rif.predict(X_train)      # ✅ Uses cached OOB/K-fold residuals
+scores = rif.decision_function(X_train) # ✅ No data leakage
 ```
 
----
+###  **Dangerous Operations** (Breaks fingerprint)
+```python
+# Train the model
+rif.fit(X_train)
 
-## 🔧 Troubleshooting
+# These operations BREAK the fingerprint and cause data leakage:
+X_train_modified = X_train.reset_index(drop=True)  # ❌ Index change
+X_train_sorted = X_train.sort_values('column')     # ❌ Row reordering  
+X_train_subset = X_train[X_train['col'] > 0]       # ❌ Filtering
+X_train_new_col = X_train.assign(new_col=1)        # ❌ Column addition
+
+# Using modified data causes LEAKAGE:
+predictions = rif.predict(X_train_modified)  # ❌ Uses direct predictions!
+```
+
+### 🛡 **Why This Matters**
+- **Fingerprint match**: Uses proper OOB/K-fold residuals → **No leakage**
+- **Fingerprint broken**: Falls back to direct predictions → **Data leakage**
+- **Result**: Invalid evaluation metrics and false confidence in model performance
+
+###  **Best Practices**
+```python
+# ✅ CORRECT: Keep training data unchanged
+X_train_original = X_train.copy()  # Save original
+rif.fit(X_train_original)
+
+# Evaluate on original data
+train_predictions = rif.predict(X_train_original)  # Safe
+test_predictions = rif.predict(X_test)             # Always safe
+
+# ✅ ALTERNATIVE: Use separate validation set
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2)
+rif.fit(X_train)
+val_predictions = rif.predict(X_val)  # Always safe (different data)
+```
+
+
+##  Troubleshooting
 
 ### Common Issues and Solutions
 
@@ -325,7 +349,7 @@ rif = ResidualIsolationForest(
 
 ---
 
-## 🏗️ Architecture Details
+## ️ Architecture Details
 
 ### Core Components
 
@@ -374,7 +398,7 @@ This approach is particularly effective for:
 
 ---
 
-## 🔬 Research Foundation
+##  Research Foundation
 
 The RIF algorithm draws from several key research areas:
 
@@ -385,7 +409,7 @@ The RIF algorithm draws from several key research areas:
 
 ---
 
-## 🤝 Contributing
+##  Contributing
 
 We welcome contributions! Please see our contributing guidelines for:
 - Bug reports and feature requests
@@ -401,7 +425,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 🏷️ Citation
+##  Citation
 
 If you use RIF in your research, please cite:
 
@@ -416,7 +440,7 @@ If you use RIF in your research, please cite:
 
 ---
 
-## 📞 Support
+##  Support
 
 - **Documentation**: Check the docstrings and examples above
 - **Issues**: [GitHub Issues](https://github.com/GiulioSurya/RIF_estimator_scikit/issues)
