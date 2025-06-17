@@ -213,7 +213,7 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         self.bayes_cv = bayes_cv
         self.rf_search_space = rf_search_space
         self.rf_params = rf_params
-        self.iso_params = iso_params or {}
+        self.iso_params = iso_params
         self.random_state = random_state
 
         # Initialize the residual generator with all relevant parameters
@@ -269,10 +269,12 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
         # Step 2: Train Isolation Forest on residuals
         # Anomalies in residual space = contextually unexpected behavior
+        iso_params_to_use = self.iso_params if self.iso_params is not None else {}
+
         self.if_ = IsolationForest(
             contamination=self.contamination,
             random_state=self.random_state,
-            **self.iso_params,
+            **iso_params_to_use,
         ).fit(res_train)
 
         return self
@@ -382,412 +384,75 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         """
         return self.generator.ind_cols_dict
 
+    def score_samples(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Compute the anomaly score of each sample using the IsolationForest algorithm.
 
+        This method returns the raw anomaly scores before applying the contamination
+        threshold. Lower scores indicate higher anomaly likelihood.
 
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Data to compute anomaly scores for.
+            Must contain the same columns as the training data.
 
-# if __name__ == "__main__":
-#     from sklearn.model_selection import train_test_split
-#     from sklearn.metrics import accuracy_score, recall_score, confusion_matrix
-#
-#     df = pd.read_csv(r"C:\Users\loverdegiulio\PycharmProjects\tesi\datas\synthetic_data_testX.csv")
-#     #df = pd.read_csv(r"C:\Users\loverdegiulio\PycharmProjects\tesi\datas\synthetic_data_moderate.csv")
-#
-#     ENV_COLS = ["env_X0", "env_X1", "env_X2", "env_X3", "env_X4", "env_X5"]
-#     IND_COLS = ["ind_Y0", "ind_Y1", "ind_Y2"]
-#
-#     y = df["is_anomaly"].to_numpy()
-#     X = df.drop(columns=["is_anomaly", "is_outlier"])
-#
-#     X_train, X_test, y_train, y_test = train_test_split(
-#         X, y,
-#         test_size=0.30,
-#         random_state=42,
-#     )
-#
-#
-#
-#     rif = ResidualIsolationForest(
-#         ind_cols=IND_COLS,
-#         env_cols=ENV_COLS,
-#         contamination=0.20,
-#         random_state=42,
-#         residual_strategy="oob",
-#         bayes_search=False,
-#         iso_params={"max_features": 1}
-#     )
-#     rif.fit(X_train)
-#
-#
-#     splits = zip([X_train, X_test], [y_train, y_test])
-#     from sklearn.metrics import precision_recall_curve, precision_score
-#
-#     import matplotlib
-#
-#     matplotlib.use("TkAgg")
-#     import matplotlib.pyplot as plt
-#     import numpy as np
-#
-#     plt.close("all")
-#
-#     plt.ion()
-#
-#     for x, y in splits:
-#         # Residual Isolation Forest
-#         y_pred_rif = np.where(rif.predict(x) == -1, 1, 0)
-#         acc_rif = accuracy_score(y, y_pred_rif)
-#         rec_rif = recall_score(y, y_pred_rif)
-#         prec_rif = precision_score(y, y_pred_rif)
-#         cm_rif = confusion_matrix(y, y_pred_rif)
-#
-#         # Isolation Forest vanilla
-#         iso = IsolationForest(
-#             contamination=0.10,
-#             random_state=42,
-#             max_features=1
-#         ).fit(X_train)
-#
-#         y_pred_iso = np.where(iso.predict(x) == -1, 1, 0)
-#         acc_iso = accuracy_score(y, y_pred_iso)
-#         rec_iso = recall_score(y, y_pred_iso)
-#         prec_iso = precision_score(y, y_pred_iso)
-#         cm_iso = confusion_matrix(y, y_pred_iso)
-#
-#         # Curva Precision-Recall per RIF con thresholds
-#         scores_rif = rif.decision_function(x)
-#         precision_rif, recall_rif, thresholds_rif = precision_recall_curve(y, -scores_rif)
-#
-#         # Curva Precision-Recall per ISO con thresholds
-#         scores_iso = iso.decision_function(x)
-#         precision_iso, recall_iso, thresholds_iso = precision_recall_curve(y, -scores_iso)
-#
-#         # Calcolo F1 score per trovare soglia ottimale
-#         f1_scores_rif = 2 * (precision_rif[:-1] * recall_rif[:-1]) / (precision_rif[:-1] + recall_rif[:-1] + 1e-10)
-#         best_idx_rif = np.argmax(f1_scores_rif)
-#         best_threshold_rif = thresholds_rif[best_idx_rif]
-#
-#         f1_scores_iso = 2 * (precision_iso[:-1] * recall_iso[:-1]) / (precision_iso[:-1] + recall_iso[:-1] + 1e-10)
-#         best_idx_iso = np.argmax(f1_scores_iso)
-#         best_threshold_iso = thresholds_iso[best_idx_iso]
-#
-#         # Visualizzazione
-#         fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
-#
-#         # Grafico Precision-Recall
-#         ax1.plot(recall_rif, precision_rif, marker='.', linestyle='-', color='blue', label='Residual Isolation Forest')
-#         ax1.plot(recall_iso, precision_iso, marker='.', linestyle='-', color='red', label='Isolation Forest')
-#         # Aggiungi punto ottimale sulla curva
-#         ax1.scatter(recall_rif[best_idx_rif], precision_rif[best_idx_rif], color='blue', s=100, marker='o',
-#                     label=f'RIF Optimal (t={best_threshold_rif:.2f})')
-#         ax1.scatter(recall_iso[best_idx_iso], precision_iso[best_idx_iso], color='red', s=100, marker='o',
-#                     label=f'ISO Optimal (t={best_threshold_iso:.2f})')
-#
-#         ax1.set_xlabel('Recall')
-#         ax1.set_ylabel('Precision')
-#         ax1.set_title('Precision-Recall Curve with Optimal Thresholds')
-#         ax1.legend()
-#         ax1.grid(True, alpha=0.3)
-#
-#         # Grafico Thresholds vs F1 score
-#         threshold_indices_rif = np.arange(len(thresholds_rif))
-#         threshold_indices_iso = np.arange(len(thresholds_iso))
-#
-#         ax2.plot(thresholds_rif, f1_scores_rif, marker='.', linestyle='-', color='blue', label='RIF F1 Score')
-#         ax2.plot(thresholds_iso, f1_scores_iso, marker='.', linestyle='-', color='red', label='ISO F1 Score')
-#         ax2.axvline(x=best_threshold_rif, color='blue', linestyle='--',
-#                     label=f'RIF Best Threshold: {best_threshold_rif:.2f}')
-#         ax2.axvline(x=best_threshold_iso, color='red', linestyle='--',
-#                     label=f'ISO Best Threshold: {best_threshold_iso:.2f}')
-#
-#         ax2.set_xlabel('Threshold')
-#         ax2.set_ylabel('F1 Score')
-#         ax2.set_title('F1 Score vs Threshold')
-#         ax2.legend()
-#         ax2.grid(True, alpha=0.3)
-#
-#         # Confronto metriche
-#         ax3.bar(['Accuracy', 'Recall', 'Precision'],
-#                 [acc_rif, rec_rif, prec_rif],
-#                 width=0.4,
-#                 label='RIF',
-#                 color='blue',
-#                 alpha=0.7)
-#         ax3.bar(['Accuracy', 'Recall', 'Precision'],
-#                 [acc_iso, rec_iso, prec_iso],
-#                 width=0.4,
-#                 label='ISO',
-#                 color='red',
-#                 alpha=0.7,
-#                 align='edge')
-#         ax3.set_ylim(0, 1)
-#         ax3.set_title('Performance Metrics')
-#         ax3.legend()
-#         ax3.grid(True, alpha=0.3)
-#
-#         plt.tight_layout()
-#         plt.show()
-#
-#         # Applicazione della soglia ottimale
-#         y_pred_rif_optimal = np.where(-scores_rif >= best_threshold_rif, 1, 0)
-#         y_pred_iso_optimal = np.where(-scores_iso >= best_threshold_iso, 1, 0)
-#
-#         # Metriche con soglia ottimale
-#         acc_rif_opt = accuracy_score(y, y_pred_rif_optimal)
-#         rec_rif_opt = recall_score(y, y_pred_rif_optimal)
-#         prec_rif_opt = precision_score(y, y_pred_rif_optimal)
-#
-#         acc_iso_opt = accuracy_score(y, y_pred_iso_optimal)
-#         rec_iso_opt = recall_score(y, y_pred_iso_optimal)
-#         prec_iso_opt = precision_score(y, y_pred_iso_optimal)
-#
-#         # Stampa risultati
-#         print("\n=== Residual Isolation Forest (Default Threshold) ===")
-#         print(f"Accuracy : {acc_rif:.3f}")
-#         print(f"Recall   : {rec_rif:.3f}")
-#         print(f"Precision: {prec_rif:.3f}")
-#         print("Confusion matrix:")
-#         print(cm_rif)
-#
-#         print("\n=== Residual Isolation Forest (Optimal Threshold: {:.3f}) ===".format(best_threshold_rif))
-#         print(f"Accuracy : {acc_rif_opt:.3f}")
-#         print(f"Recall   : {rec_rif_opt:.3f}")
-#         print(f"Precision: {prec_rif_opt:.3f}")
-#         print("Confusion matrix:")
-#         print(confusion_matrix(y, y_pred_rif_optimal))
-#
-#         print("\n=== Isolation Forest (Default Threshold) ===")
-#         print(f"Accuracy : {acc_iso:.3f}")
-#         print(f"Recall   : {rec_iso:.3f}")
-#         print(f"Precision: {prec_iso:.3f}")
-#         print("Confusion matrix:")
-#         print(cm_iso)
-#
-#         print("\n=== Isolation Forest (Optimal Threshold: {:.3f}) ===".format(best_threshold_iso))
-#         print(f"Accuracy : {acc_iso_opt:.3f}")
-#         print(f"Recall   : {rec_iso_opt:.3f}")
-#         print(f"Precision: {prec_iso_opt:.3f}")
-#         print("Confusion matrix:")
-#         print(confusion_matrix(y, y_pred_iso_optimal))
-# #######################
+        Returns
+        -------
+        scores : np.ndarray of shape (n_samples,)
+            Raw anomaly scores for each observation.
+            The lower the score, the more anomalous the observation.
 
-# if __name__ == "__main__":
-#
-#     import numpy as np
-#     import pandas as pd
-#     from sklearn.model_selection import train_test_split
-#     from sklearn.metrics import accuracy_score, recall_score, confusion_matrix
-#
-#
-#
-#     env_cols = ["year", "month", "day", "latitude", "longitude"]
-#     ind_cols = ["zon_winds", "mer_winds", "humidity", "air_temp", "ss_temp"]
-#
-#
-#     prepared_df = pd.read_csv(r"C:\Users\loverdegiulio\PycharmProjects\tesi\datas\elnino_prepared.csv")
-#
-#     # Target e feature set
-#     y = prepared_df["is_anomaly"].to_numpy()
-#     X = prepared_df.drop(columns=["is_anomaly", "is_outlier"])
-#
-#     # Train-test split
-#     X_train, X_test, y_train, y_test = train_test_split(
-#         X, y,
-#         test_size=0.30,
-#         random_state=42,
-#     )
-#
-#     from _residual_gen import global_r2
-#
-#     # Residual Isolation Forest
-#     rif = ResidualIsolationForest(
-#         ind_cols=ind_cols,
-#         env_cols=env_cols,
-#         contamination=0.10,
-#         random_state=42,
-#         residual_strategy="kfold",
-#         bayes_search=False,
-#         iso_params={"max_features": 1}
-#     )
-#     rif.fit(X_train)
-#
-#     splits = zip([X_train, X_test], [y_train, y_test])
-#
-#     for x, y in splits:
-#
-#         y_pred_rif = np.where(rif.predict(x) == -1, 1, 0)
-#         acc_rif = accuracy_score(y, y_pred_rif)
-#         rec_rif = recall_score(y, y_pred_rif)
-#         cm_rif = confusion_matrix(y, y_pred_rif)
-#
-#         print("=== Residual Isolation Forest ===")
-#         print(f"Accuracy : {acc_rif:.3f}")
-#         print(f"Recall   : {rec_rif:.3f}")
-#         print("Confusion matrix:\n", cm_rif)
-#
-#         # Isolation Forest vanilla
-#         iso = IsolationForest(
-#             contamination=0.10,
-#             random_state=42,
-#             max_features=1
-#         ).fit(X_train)
-#
-#         iso_pred = np.where(iso.predict(x) == -1, 1, 0)
-#         acc_iso = accuracy_score(y, iso_pred)
-#         rec_iso = recall_score(y, iso_pred)
-#         cm_iso = confusion_matrix(y, iso_pred)
-#
-#         print("\n=== Isolation Forest (vanilla) ===")
-#         print(f"Accuracy : {acc_iso:.3f}")
-#         print(f"Recall   : {rec_iso:.3f}")
-#         print("Confusion matrix:\n", cm_iso)
-#
-#
+        Notes
+        -----
+        The relationship between score_samples and decision_function is:
+        decision_function(X) = score_samples(X) - offset_
 
-if __name__ == "__main__":
-    from sklearn.metrics import accuracy_score, recall_score, confusion_matrix
-    from sklearn.preprocessing import StandardScaler
-    from rif_estimator import ResidualIsolationForest
+        Where offset_ is the threshold used to separate inliers from outliers
+        based on the contamination parameter.
 
-    df = pd.read_csv(r"C:\Users\loverdegiulio\PycharmProjects\RIF_estimator_scikit\test_eif\datas\dati.csv")
+        Examples
+        --------
+        >>> scores = rif.score_samples(X_test)
+        >>> # Get the 10 most anomalous samples
+        >>> most_anomalous_idx = np.argsort(scores)[:10]
+        >>> most_anomalous_samples = X_test.iloc[most_anomalous_idx]
 
-    ENV_COLS = ["rate_receive_lo", "rate_transmit_lo", "rate_receive_ens33", "rate_transmit_ens33", "hour"]
-    IND_COLS = ["cpu_busy", "ram_busy", "swap_busy", "disk_busy"]
+        >>> # Compare with decision_function
+        >>> decision_scores = rif.decision_function(X_test)
+        >>> raw_scores = rif.score_samples(X_test)
+        >>> offset = rif.offset_
+        >>> assert np.allclose(decision_scores, raw_scores - offset)
+        """
+        # Ensure the model has been fitted
+        check_is_fitted(self, "if_")
 
-    y = df["anomaly"].to_numpy()
+        # Transform to residual space (uses caching if available)
+        res = self.generator.transform(X)
 
-    X = df.drop(columns=["anomaly", "time", "date"])
+        # Get raw anomaly scores from Isolation Forest
+        return self.if_.score_samples(res)
 
-    # Feature da standardizzare
-    feature_cols = ENV_COLS + IND_COLS
-    X_raw = df[feature_cols]
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_raw)
-    X_scaled_df = pd.DataFrame(X_scaled, columns=feature_cols)
-    #X_scaled_df["date"] = df["date"]
-    X_scaled_df["hour"] = df["hour"]
+    @property
+    def offset_(self) -> float:
+        """
+        Offset used to define the decision function from raw scores.
 
-    feature_mapping = {
-        "cpu_busy": ["rate_receive_lo", "rate_transmit_lo", "rate_receive_ens33", "rate_transmit_ens33", "ram_busy", "swap_busy"],
-        "ram_busy": ["rate_receive_lo", "rate_transmit_lo", "rate_receive_ens33", "rate_transmit_ens33"],
-        "swap_busy":["rate_receive_lo", "rate_transmit_lo", "rate_receive_ens33", "rate_transmit_ens33", "ram_busy"],
-        "disk_busy": ["rate_receive_lo", "rate_transmit_lo", "rate_receive_ens33", "rate_transmit_ens33", "cpu_busy"]
-    }
+        This property exposes the offset used by the underlying Isolation Forest
+        to convert raw anomaly scores into decision function values.
 
-    rif = ResidualIsolationForest(
-        ind_cols=IND_COLS,
-        env_cols=ENV_COLS,
-        contamination=0.009,
-        random_state=42,
-        residual_strategy="oob",
-        bayes_search=True,
-        iso_params={"max_features": 1},
-    )
+        Returns
+        -------
+        float
+            The offset value where decision_function = score_samples - offset_
 
-    rif.fit(X_scaled_df)
-
-    y_pred_rif = np.where(rif.predict(X_scaled_df) == -1, 1, 0)
-    df["anomaly_rif"] = y_pred_rif
-
-    # rif.get_feature_mapping()
-    #
-    # from sklearn.model_selection import cross_val_score
-    #
-    # scores = cross_val_score(
-    #     ResidualIsolationForest(ind_cols=IND_COLS, env_cols=ENV_COLS),
-    #     X, y,
-    #     cv=5,
-    #     scoring='accuracy'
-    # )  # quesot non funge
-    #
-    #
-    #
-    #
-    # from sklearn.model_selection import GridSearchCV
-    #
-    # param_grid = {
-    #     'contamination': [0.05, 0.10, 0.15],
-    #     'bayes_search': [True, False],
-    #     'residual_strategy': ['oob', 'kfold', None]
-    # }
-    #
-    # grid_search = GridSearchCV(
-    #     ResidualIsolationForest(ind_cols=IND_COLS, env_cols=ENV_COLS),
-    #     param_grid,
-    #     cv=3,
-    #     scoring='f1'
-    # )
-    # grid_search.fit(X, y)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    acc_rif = accuracy_score(y, y_pred_rif)
-    rec_rif = recall_score(y, y_pred_rif)
-    cm_rif = confusion_matrix(y, y_pred_rif)
-    print("=== Residual Isolation Forest ===")
-    print(f"Accuracy : {acc_rif:.3f}")
-    print(f"Recall   : {rec_rif:.3f}")
-    print("Confusion matrix:\n", cm_rif)
-
-
-    X.drop(columns=["anomaly_type"], inplace=True)
-    # Isolation Forest vanilla
-    iso = IsolationForest(
-        contamination=0.009,
-        random_state=42,
-        max_features=1
-    ).fit(X_scaled_df)
-    iso_pred = np.where(iso.predict(X_scaled_df) == -1, 1, 0)
-    df["anomaly_iso"] = iso_pred
-    acc_iso = accuracy_score(y, iso_pred)
-    rec_iso = recall_score(y, iso_pred)
-    cm_iso = confusion_matrix(y, iso_pred)
-    print("\n=== Isolation Forest (vanilla) ===")
-    print(f"Accuracy : {acc_iso:.3f}")
-    print(f"Recall   : {rec_iso:.3f}")
-    print("Confusion matrix:\n", cm_iso)
-
-    from sklearn.cluster import DBSCAN
-
-    X_scaled_df.drop(columns=["hour"], inplace=True)
-
-    eps_value = np.mean(np.std(X_scaled_df.values, axis=0)) / 2 * 3.5
-
-    dbscan = DBSCAN(eps=eps_value, min_samples=5)
-
-    db_labels = dbscan.fit_predict(X_scaled_df)
-
-    dbscan_pred = np.where(db_labels == -1, 1, 0)
-    df["anomaly_dbscan"] = dbscan_pred
-
-
-    acc_dbscan = accuracy_score(y, dbscan_pred)
-    rec_dbscan = recall_score(y, dbscan_pred)
-    cm_dbscan = confusion_matrix(y, dbscan_pred)
-
-    print("\n=== DBSCAN ===")
-    print(f"Accuracy : {acc_dbscan:.3f}")
-    print(f"Recall   : {rec_dbscan:.3f}")
-    print("Confusion matrix:\n", cm_dbscan)
-
-    #df.to_excel(r"C:\Users\loverdegiulio\PycharmProjects\RIF_estimator_scikit\test_eif\datas\results2.xlsx", index=False)
+        Notes
+        -----
+        When contamination='auto', offset = -0.5
+        When contamination is specified, offset is computed to ensure the
+        expected proportion of outliers have decision_function < 0
+        """
+        check_is_fitted(self, "if_")
+        return self.if_.offset_
 
 

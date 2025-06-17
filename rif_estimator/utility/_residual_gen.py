@@ -136,12 +136,23 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         if strategy not in {"oob", "kfold", None}:
             raise ValueError("strategy must be 'oob', 'kfold' or None")
 
+
+        self.ind_cols = ind_cols
+        self.env_cols = env_cols
+        self.strategy = strategy
+        self.kfold_splits = kfold_splits
+        self.bayes_search = bayes_search
+        self.bayes_iter = bayes_iter
+        self.bayes_cv = bayes_cv
+        self.search_space = search_space
+        self.rf_params = rf_params
+        self.random_state = check_random_state(random_state)
+
         # Handle both list and dictionary cases for ind_cols
-        # This allows flexible specification of environmental columns
         if isinstance(ind_cols, dict):
             # Dictionary case: each target has its own environmental columns
             self.ind_cols_dict = {k: list(v) for k, v in ind_cols.items()}
-            self.ind_cols = list(ind_cols.keys())
+            self.ind_cols_list = list(ind_cols.keys())  # Cambia nome per evitare conflitti
             if env_cols is not None:
                 warnings.warn(
                     "env_cols parameter is ignored when ind_cols is a dictionary. "
@@ -152,19 +163,9 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
             # Sequence case: all targets use the same environmental columns
             if env_cols is None:
                 raise ValueError("env_cols must be provided when ind_cols is a sequence")
-            self.ind_cols = list(ind_cols)
-            self.ind_cols_dict = {col: list(env_cols) for col in self.ind_cols}
+            self.ind_cols_list = list(ind_cols)
+            self.ind_cols_dict = {col: list(env_cols) for col in self.ind_cols_list}
 
-        # Store parameters
-        self.env_cols = env_cols
-        self.strategy = strategy
-        self.kfold_splits = kfold_splits
-        self.bayes_search = bayes_search
-        self.bayes_iter = bayes_iter
-        self.bayes_cv = bayes_cv
-        self.search_space = search_space or _DEFAULT_RF_SPACE
-        self.rf_params = rf_params or {}
-        self.random_state = check_random_state(random_state)
 
         # Internal attributes filled during fit
         self.models_: Dict[str, RandomForestRegressor]
@@ -219,13 +220,15 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         Dict[str, int]
             Best hyperparameters found by the optimization.
         """
+        search_space_to_use = self.search_space if self.search_space is not None else _DEFAULT_RF_SPACE
+
         # Initialize base Random Forest model
         rf = RandomForestRegressor(random_state=self.random_state, n_jobs=-1)
 
         # Perform Bayesian optimization
         opt = BayesSearchCV(
             rf,
-            search_spaces=self.search_space,
+            search_spaces=search_space_to_use,
             n_iter=self.bayes_iter,
             cv=self.bayes_cv,
             n_jobs=-1,
@@ -236,7 +239,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
 
         return opt.best_params_
 
-    def _fit_single_model(self, X_env: pd.DataFrame, y_ind: pd.Series, params: dict) -> RandomForestRegressor:
+    def _fit_single_model(self, X_env: pd.DataFrame, y_ind: pd.Series, params: dict) -> RandomForestRegressor.fit:
         """
         Fit a single RandomForest model with given parameters.
 
@@ -384,32 +387,23 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         # Initialize storage for models and parameters
         self.models_ = {}
         self.best_params_ = {}
-
-        # Create fingerprint of the training DataFrame for caching
-        # This allows us to detect when the same data is used in transform
         self._training_data_fingerprint_ = DataFrameFingerprint(X)
 
-        # Fit a model for each target column
-        for col in self.ind_cols:
-            # Use specific environmental columns for this target
+        for col in self.ind_cols_list:  # ← Usa ind_cols_list
             env_cols_for_this_target = self.ind_cols_dict[col]
             X_env = X[env_cols_for_this_target]
             y_ind = X[col]
 
-            # Determine hyperparameters (via search or provided)
-            params = (
-                self._bayesian_search(X_env, y_ind)
-                if self.bayes_search
-                else self.rf_params
-            )
+            # Gestisci i valori None QUI
+            if self.bayes_search:
+                params = self._bayesian_search(X_env, y_ind)
+            else:
+                params = self.rf_params if self.rf_params is not None else {}
 
-            # Fit and store the model
             self.models_[col] = self._fit_single_model(X_env, y_ind, params)
             self.best_params_[col] = params
 
-        # Clear residual cache when refitting
         self._residual_cache_.clear()
-
         return self
 
     def transform(self, X: pd.DataFrame) -> np.ndarray:
