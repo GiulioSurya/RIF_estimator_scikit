@@ -4,7 +4,7 @@
 [![scikit-learn](https://img.shields.io/badge/sklearn-compatible-orange.svg)](https://scikit-learn.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **A scikit-learn compatible estimator for contextual anomaly detection that goes beyond traditional approaches.**
+> **A scikit-learn compatible estimator for contextual anomaly detection.**
 
 Residual Isolation Forest (RIF) is a powerful anomaly detection algorithm that combines the best of both worlds: **contextual understanding** and **unsupervised learning**. Instead of treating all deviations as anomalies, RIF first models what's *normal* given the context, then detects anomalies in the unexplained residuals.
 
@@ -174,28 +174,66 @@ env_rif = ResidualIsolationForest(
     residual_strategy='kfold',  # Maximum robustness
     bayes_search=True
 )
-
+```
 
 ---
 
-## 📊 Understanding Your Results
+##  Understanding Your Results
 
-### Interpreting Predictions
+### Basic Predictions and Scoring
 
 ```python
-# Get detailed results
-predictions = rif.predict(X_test)
-scores = rif.decision_function(X_test)
+# Get binary predictions
+predictions = rif.predict(X_test)  # -1 for anomalies, +1 for normal
+anomaly_mask = predictions == -1
+print(f"Found {np.sum(anomaly_mask)} anomalies out of {len(X_test)} samples")
 
-# Find the most anomalous samples
-anomaly_indices = np.where(predictions == -1)[0]
-most_anomalous = np.argsort(scores)[:10]  # Top 10 most anomalous
-
-print(f"Found {len(anomaly_indices)} anomalies out of {len(X_test)} samples")
-print(f"Most anomalous samples: {most_anomalous}")
+# Get continuous anomaly scores 
+scores = rif.decision_function(X_test)  # Lower = more anomalous
+most_anomalous_idx = np.argsort(scores)[:10]
+print(f"Most anomalous samples: {most_anomalous_idx}")
 ```
 
-### Feature Importance
+### Advanced Scoring Methods
+
+RIF provides multiple ways to assess anomaly likelihood:
+
+```python
+# Raw anomaly scores (before applying contamination threshold)
+raw_scores = rif.score_samples(X_test)
+
+# Decision function scores (relative to threshold)
+decision_scores = rif.decision_function(X_test)
+
+# Access the threshold used to separate normal from anomalous
+threshold = rif.offset_
+print(f"Anomaly threshold: {threshold:.3f}")
+
+# Verify the relationship: decision_function = score_samples - offset
+assert np.allclose(decision_scores, raw_scores - threshold)
+```
+
+### Score Interpretation
+
+```python
+# Understanding the different scoring methods:
+
+# 1. score_samples(): Raw isolation scores
+raw_scores = rif.score_samples(X_test)
+print("Raw scores - higher values = more normal")
+print(f"Range: [{raw_scores.min():.3f}, {raw_scores.max():.3f}]")
+
+# 2. decision_function(): Threshold-adjusted scores  
+decision_scores = rif.decision_function(X_test)
+print("Decision scores - negative values = anomalies")
+print(f"Range: [{decision_scores.min():.3f}, {decision_scores.max():.3f}]")
+
+# 3. offset_: The threshold that separates normal from anomalous
+print(f"Threshold (offset): {rif.offset_:.3f}")
+print(f"Samples with decision_function < 0: {np.sum(decision_scores < 0)} (predicted anomalies)")
+```
+
+### Feature Mapping
 
 ```python
 # See which environmental features explain which behaviors
@@ -204,17 +242,79 @@ for target, predictors in feature_mapping.items():
     print(f"{target} is predicted by: {', '.join(predictors)}")
 ```
 
-### Model Insights
+---
+
+##  Scikit-learn Compatibility
+
+RIF is fully compatible with scikit-learn's ecosystem:
+
+### Cross-Validation
 
 ```python
-# Access the underlying models for interpretation
-for target, model in rif.generator.models_.items():
-    importance = model.feature_importances_
-    features = rif.generator.ind_cols_dict[target]
-    
-    print(f"\n{target} - Feature Importance:")
-    for feat, imp in zip(features, importance):
-        print(f"  {feat}: {imp:.3f}")
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+
+# Cross-validate anomaly detection performance
+# Note: Convert labels to scikit-learn format (1=normal, -1=anomaly)
+y_sklearn = np.where(y_true == 1, -1, 1)  # Convert your labels
+
+rif = ResidualIsolationForest(
+    ind_cols=['cpu_usage', 'memory_usage'],
+    env_cols=['hour', 'network_traffic'],
+    contamination=0.1
+)
+
+# Perform cross-validation
+cv_scores = cross_val_score(
+    rif, X, y_sklearn, 
+    cv=5, 
+    scoring='accuracy'
+)
+print(f"CV Accuracy: {cv_scores.mean():.3f} (+/- {cv_scores.std() * 2:.3f})")
+```
+
+### Grid Search Compatibility
+
+```python
+from sklearn.model_selection import GridSearchCV
+
+# Hyperparameter tuning with GridSearchCV
+param_grid = {
+    'contamination': [0.05, 0.1, 0.15],
+    'residual_strategy': ['oob', 'kfold'],
+    'bayes_search': [True, False]
+}
+
+grid_search = GridSearchCV(
+    ResidualIsolationForest(ind_cols=IND_COLS, env_cols=ENV_COLS),
+    param_grid,
+    cv=3,
+    scoring='recall',
+    n_jobs=-1
+)
+
+grid_search.fit(X_train, y_train)
+print(f"Best parameters: {grid_search.best_params_}")
+```
+
+### Pipeline Integration
+
+```python
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+# Use RIF in a scikit-learn pipeline
+pipeline = Pipeline([
+    ('scaler', StandardScaler()),
+    ('rif', ResidualIsolationForest(
+        ind_cols=IND_COLS,
+        env_cols=ENV_COLS,
+        contamination=0.1
+    ))
+])
+
+# Fit and predict with the pipeline
+pipeline.fit(X_train)
+predictions = pipeline.predict(X_test)
 ```
 
 ---
@@ -242,13 +342,12 @@ fast_rif = ResidualIsolationForest(
 robust_rif = ResidualIsolationForest(
     ind_cols=IND_COLS,
     env_cols=ENV_COLS,
-    residual_strategy='oob',   
+    residual_strategy='kfold',   # Most robust strategy
     bayes_search=True,
     bayes_iter=10,              # Thorough hyperparameter search
     bayes_cv=5                  # More CV for hyperparameter tuning
 )
-
-
+```
 
 ## ⚠️ Critical: Data Integrity Warning
 
@@ -301,7 +400,6 @@ X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2)
 rif.fit(X_train)
 val_predictions = rif.predict(X_val)  # Always safe (different data)
 ```
-
 
 ##  Troubleshooting
 
@@ -383,7 +481,7 @@ Anomaly Detection (in residual space)
 
 ---
 
-## 📚 Theoretical Background
+##  Theoretical Background
 
 RIF is based on the principle of **contextual anomaly detection**: anomalies that are aberrant data examples in a given context but otherwise normal. The algorithm addresses limitations of traditional approaches by:
 
@@ -419,7 +517,7 @@ We welcome contributions! Please see our contributing guidelines for:
 
 ---
 
-## 📄 License
+##  License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
@@ -448,4 +546,3 @@ If you use RIF in your research, please cite:
 
 ---
 
-*Built with ❤️ for the anomaly detection community*
