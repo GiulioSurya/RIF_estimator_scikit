@@ -13,7 +13,7 @@ making anomalies more apparent.
 
 Author: Giulio Surya Lo Verde
 Date: 13/06/2025
-Version: 1.0
+Version: 1.2
 
 References
 ----------
@@ -44,16 +44,16 @@ References
        https://doi.org/10.1007/978-94-015-3994-4
 """
 
-from typing import Sequence, Dict, Optional, Union
+from typing import Sequence, Dict, Optional, Union, List, Tuple
 import numpy as np
-import pandas as pd
 from skopt.space import Integer
 from sklearn.base import BaseEstimator, OutlierMixin
 from sklearn.ensemble import IsolationForest
-from sklearn.utils.validation import check_is_fitted
-from utility import ResidualGenerator
+from sklearn.utils.validation import check_is_fitted, validate_data
+from utility import ResidualGenerator, get_column_indices
 
-class ResidualIsolationForest(BaseEstimator, OutlierMixin):
+
+class ResidualIsolationForest(OutlierMixin, BaseEstimator):
     """
     Contextual anomaly detector based on residuals and Isolation Forest.
 
@@ -72,14 +72,16 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
     Parameters
     ----------
-    ind_cols : Sequence[str] or Dict[str, Sequence[str]]
+    ind_cols : Sequence[str] or Sequence[int] or Dict[str, Sequence[str]] or Dict[int, Sequence[int]]
         Individual/behavioral columns to analyze for anomalies.
-        - If Sequence: Names of columns representing behavioral features
-          that will all use the same environmental predictors.
+        - If Sequence of str: Names of columns representing behavioral features
+          that will all use the same environmental predictors (for DataFrame input).
+        - If Sequence of int: Indices of columns representing behavioral features
+          that will all use the same environmental predictors (for numpy array input).
         - If Dict: Mapping from each target column to its specific
           environmental predictors, allowing different contexts per target.
 
-    env_cols : Sequence[str], optional
+    env_cols : Sequence[str] or Sequence[int], optional
         Environmental/contextual columns used as predictors.
         - Used for all ind_cols if ind_cols is a sequence.
         - Ignored if ind_cols is a dictionary (use dict values instead).
@@ -125,7 +127,7 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
     Attributes
     ----------
-    generator : ResidualGenerator
+    generator_ : ResidualGenerator
         The fitted residual generator instance.
 
     if_ : IsolationForest
@@ -133,7 +135,7 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
     Examples
     --------
-    >>> # Basic usage with uniform environmental context
+    >>> # Basic usage with pandas DataFrame
     >>> rif = ResidualIsolationForest(
     ...     ind_cols=['cpu_usage', 'memory_usage'],
     ...     env_cols=['time_of_day', 'day_of_week'],
@@ -141,6 +143,15 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
     ... )
     >>> rif.fit(X_train)
     >>> anomalies = rif.predict(X_test)  # -1 for anomalies, 1 for normal
+
+    >>> # Basic usage with numpy array
+    >>> rif = ResidualIsolationForest(
+    ...     ind_cols=[0, 1],  # indices of behavioral columns
+    ...     env_cols=[2, 3],  # indices of environmental columns
+    ...     contamination=0.05
+    ... )
+    >>> rif.fit(X_train)
+    >>> anomalies = rif.predict(X_test)
 
     >>> # Advanced usage with different contexts per target
     >>> rif = ResidualIsolationForest(
@@ -165,10 +176,10 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
        **Important**: When applying the model to the same dataset used for
        training, maintaining data integrity is essential to preserve the
-       leakage-free properties of the algorithm. The DataFrame fingerprinting
+       leakage-free properties of the algorithm. The data fingerprinting
        mechanism relies on exact structural and content matching to correctly
        identify cached residuals. Any modifications to the dataset (e.g.,
-       index operations, sorting, filtering, or column transformations) will
+       sorting, filtering, or transformations) will
        invalidate the fingerprint, causing the system to recompute residuals
        using the fitted models rather than the appropriate out-of-bag or
        cross-validated predictions. This would introduce data leakage and
@@ -181,6 +192,8 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
     - Anomalies deviate from expected patterns given the context
     - The relationship between environment and behavior can be modeled
 
+    This class accepts both pandas DataFrames and numpy arrays as input.
+
     See Also
     --------
     ResidualGenerator : The module that generates contextual residuals
@@ -189,8 +202,8 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
     def __init__(
             self,
-            ind_cols: Union[Sequence[str], Dict[str, Sequence[str]]],
-            env_cols: Optional[Sequence[str]] = None,
+            ind_cols: Union[Sequence[str], Sequence[int], Dict[str, Sequence[str]], Dict[int, Sequence[int]]],
+            env_cols: Optional[Union[Sequence[str], Sequence[int]]] = None,
             *,
             contamination: float = 0.10,
             residual_strategy: str | None = "oob",
@@ -216,21 +229,7 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         self.iso_params = iso_params
         self.random_state = random_state
 
-        # Initialize the residual generator with all relevant parameters
-        self.generator = ResidualGenerator(
-            ind_cols=ind_cols,
-            env_cols=env_cols,
-            strategy=residual_strategy,
-            bayes_search=bayes_search,
-            bayes_iter=bayes_iter,
-            bayes_cv=bayes_cv,
-            search_space=rf_search_space,
-            rf_params=rf_params,
-            random_state=random_state,
-        )
-
-
-    def fit(self, X: pd.DataFrame, y=None):
+    def fit(self, X, y=None):
         """
         Fit the residual generator and Isolation Forest on training data.
 
@@ -243,8 +242,9 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
         Parameters
         ----------
-        X : pd.DataFrame
+        X : array-like
             Training dataset containing both environmental and behavioral columns.
+            Supports pandas DataFrames, numpy arrays, lists, tuples, and other array-like objects.
             Must include all columns specified in ind_cols and env_cols.
 
         y : ignored
@@ -263,12 +263,42 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         - The appropriateness of the contamination parameter
         - The quality and representativeness of training data
         """
-        # Step 1: Generate residuals using the configured strategy
-        # This removes the predictable (environmental) component
-        res_train = self.generator.fit_transform(X)
 
-        # Step 2: Train Isolation Forest on residuals
-        # Anomalies in residual space = contextually unexpected behavior
+        # FIRST: Extract column indices before any transformation
+        # FIRST: Extract column indices before any transformation
+        ind_indices, ind_cols_dict = get_column_indices(
+            X=X,
+            ind_cols=self.ind_cols,
+            env_cols=self.env_cols
+        )
+
+        # THEN: Validate input data and convert to numpy array
+        X_array = validate_data(
+            self,
+            X=X,
+            reset=True,
+            ensure_2d=True,
+            dtype=None,
+            accept_sparse=False,
+            estimator=self
+        )
+
+        # Initialize the residual generator with indices (not column names)
+        self.generator_ = ResidualGenerator(
+            ind_indices=ind_indices,
+            ind_cols_dict=ind_cols_dict,
+            strategy=self.residual_strategy,
+            bayes_search=self.bayes_search,
+            bayes_iter=self.bayes_iter,
+            bayes_cv=self.bayes_cv,
+            search_space=self.rf_search_space,
+            rf_params=self.rf_params,
+            random_state=self.random_state,
+        )
+
+        # Fit and transform using numpy array
+        res_train = self.generator_.fit_transform(X_array)
+
         iso_params_to_use = self.iso_params if self.iso_params is not None else {}
 
         self.if_ = IsolationForest(
@@ -279,7 +309,7 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
         return self
 
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
+    def predict(self, X) -> np.ndarray:
         """
         Predict whether each observation is an anomaly.
 
@@ -289,9 +319,9 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
         Parameters
         ----------
-        X : pd.DataFrame
-            Data to evaluate for anomalies.
-            Must contain the same columns as the training data.
+        X : array-like
+            Data to evaluate for anomalies. Supports pandas DataFrames, numpy arrays,
+            lists, tuples, and other array-like objects.
 
         Returns
         -------
@@ -307,16 +337,27 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         >>> anomaly_mask = predictions == -1
         >>> anomalous_samples = X_test[anomaly_mask]
         """
+
+        X_array = validate_data(
+            self,
+            X=X,
+            reset=False,  # Don't reset n_features_in_
+            ensure_2d=True,
+            dtype=None,
+            accept_sparse=False,
+            estimator=self
+        )
+
         # Ensure the model has been fitted
         check_is_fitted(self, "if_")
 
         # Transform to residual space (uses caching if available)
-        res = self.generator.transform(X)
+        res = self.generator_.transform(X_array)
 
         # Predict using Isolation Forest
         return self.if_.predict(res)
 
-    def decision_function(self, X: pd.DataFrame) -> np.ndarray:
+    def decision_function(self, X) -> np.ndarray:
         """
         Compute anomaly scores for each observation.
 
@@ -326,8 +367,9 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
         Parameters
         ----------
-        X : pd.DataFrame
-            Data to compute anomaly scores for.
+        X : array-like
+            Data to compute anomaly scores for. Supports pandas DataFrames, numpy arrays,
+            lists, tuples, and other array-like objects.
 
         Returns
         -------
@@ -351,18 +393,28 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         >>> top_anomalies_idx = np.argsort(scores)[:10]
         >>> top_anomalies = X_test.iloc[top_anomalies_idx]
         """
+        X_array = validate_data(
+            self,
+            X=X,
+            reset=False,  # Don't reset n_features_in_
+            ensure_2d=True,
+            dtype=None,
+            accept_sparse=False,
+            estimator=self
+        )
+
         # Ensure the model has been fitted
         check_is_fitted(self, "if_")
 
         # Transform to residual space
-        res = self.generator.transform(X)
+        res = self.generator_.transform(X_array)
 
         # Get anomaly scores from Isolation Forest
         return self.if_.decision_function(res)
 
-    def get_feature_mapping(self) -> Dict[str, list]:
+    def get_feature_mapping(self) -> Dict[int, List[int]]:
         """
-        Return the mapping of target columns to their environmental features.
+        Return the mapping of target column indices to their environmental feature indices.
 
         This method provides transparency into which environmental variables
         are used to model each behavioral variable, useful for interpretation
@@ -372,19 +424,19 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         -------
         mapping : dict
             Dictionary where:
-            - Keys: target column names (behavioral variables)
-            - Values: lists of environmental feature names used as predictors
+            - Keys: target column indices (behavioral variables)
+            - Values: lists of environmental feature indices used as predictors
 
         Example
         -------
         >>> mapping = rif.get_feature_mapping()
         >>> print(mapping)
-        {'cpu_usage': ['time_of_day', 'running_processes'],
-         'memory_usage': ['time_of_day', 'running_processes']}
+        {0: [2, 3, 4], 1: [2, 3, 4]}  # targets 0,1 use env features 2,3,4
         """
-        return self.generator.ind_cols_dict
+        check_is_fitted(self, "generator_")
+        return self.generator_.ind_cols_dict
 
-    def score_samples(self, X: pd.DataFrame) -> np.ndarray:
+    def score_samples(self, X) -> np.ndarray:
         """
         Compute the anomaly score of each sample using the IsolationForest algorithm.
 
@@ -393,9 +445,9 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
 
         Parameters
         ----------
-        X : pd.DataFrame
-            Data to compute anomaly scores for.
-            Must contain the same columns as the training data.
+        X : array-like
+            Data to compute anomaly scores for. Supports pandas DataFrames, numpy arrays,
+            lists, tuples, and other array-like objects.
 
         Returns
         -------
@@ -424,11 +476,21 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         >>> offset = rif.offset_
         >>> assert np.allclose(decision_scores, raw_scores - offset)
         """
+        X_array = validate_data(
+            self,
+            X=X,
+            reset=False,  # Don't reset n_features_in_
+            ensure_2d=True,
+            dtype=None,
+            accept_sparse=False,
+            estimator=self
+        )
+
         # Ensure the model has been fitted
         check_is_fitted(self, "if_")
 
         # Transform to residual space (uses caching if available)
-        res = self.generator.transform(X)
+        res = self.generator_.transform(X_array)
 
         # Get raw anomaly scores from Isolation Forest
         return self.if_.score_samples(res)
@@ -454,5 +516,3 @@ class ResidualIsolationForest(BaseEstimator, OutlierMixin):
         """
         check_is_fitted(self, "if_")
         return self.if_.offset_
-
-

@@ -12,25 +12,23 @@ computation and includes Bayesian hyperparameter optimization capabilities.
 
 Author: Giulio Surya Lo Verde
 Date: 13/06/2025
-Version: 1.0
+Version: 1.2
 """
 
-from typing import Sequence, Dict, Optional, List, Tuple, Union
+from typing import Dict, Optional, List, Tuple
 import numpy as np
-import pandas as pd
 from skopt import BayesSearchCV
 from skopt.space import Integer
 from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold, cross_val_predict
-from sklearn.utils.validation import check_is_fitted, assert_all_finite
+from sklearn.utils.validation import check_is_fitted
 from sklearn.utils import check_random_state
 from functools import partial
 import warnings
-from ._df_fingerprint import DataFrameFingerprint
+from utility import DataFrameFingerprint
 
 # Default search space for Random Forest hyperparameter optimization
-
 _DEFAULT_RF_SPACE: Dict[str, Integer] = {
     "n_estimators": Integer(100, 500),  # Number of trees in the forest
     "max_depth": Integer(3, 30),  # Maximum depth of trees
@@ -39,9 +37,9 @@ _DEFAULT_RF_SPACE: Dict[str, Integer] = {
 }
 
 
-class ResidualGenerator(BaseEstimator, TransformerMixin):
+class ResidualGenerator(TransformerMixin, BaseEstimator):
     """
-    Generate leakage-free residuals for a set of target columns.
+    Generate leakage-free residuals for a set of target columns using numpy arrays.
 
     This class fits Random Forest models to predict target columns based on
     environmental variables and computes residuals to remove environmental
@@ -55,13 +53,10 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
 
     Parameters
     ----------
-    ind_cols : Sequence[str] or Dict[str, Sequence[str]]
-        Target columns for which residuals are required.
-        If Sequence: list of column names that will use the same env_cols.
-        If Dict: mapping from target column to its specific environmental columns.
-    env_cols : Sequence[str], optional
-        Environmental (contextual) columns used as predictors for all ind_cols.
-        Ignored if ind_cols is a dictionary.
+    ind_indices : List[int]
+        List of target column indices for which residuals are required.
+    ind_cols_dict : Dict[int, List[int]]
+        Mapping from target column indices to their environmental column indices.
     strategy : {"oob", "kfold", None}, default="oob"
         Prediction strategy to avoid data leakage:
 
@@ -74,7 +69,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
     bayes_search : bool, default=False
         Whether to perform Bayesian hyperparameter optimization.
     bayes_iter : int, default=3
-        Number of iterations for BayesSearchCV.
+        Number of iterations for BayesearchCV.
     bayes_cv : int, default=3
         Number of CV folds for BayesSearchCV.
     search_space : dict[str, skopt.space.Dimension] or None, default=None
@@ -87,41 +82,44 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
 
     Attributes
     ----------
-    models_ : Dict[str, RandomForestRegressor]
-        Fitted models for each target column.
-    best_params_ : Dict[str, Dict]
-        Best hyperparameters found for each target column.
-    ind_cols_dict : Dict[str, List[str]]
-        Mapping from target columns to their environmental columns.
+    models_ : Dict[int, RandomForestRegressor]
+        Fitted models for each target column index.
+    best_params_ : Dict[int, Dict]
+        Best hyperparameters found for each target column index.
+    ind_cols_dict : Dict[int, List[int]]
+        Mapping from target column indices to their environmental column indices.
 
     Examples
     --------
-    >>> # Basic usage with same environmental columns for all targets
+    >>> # Basic usage with numpy array
     >>> rg = ResidualGenerator(
-    ...     ind_cols=['target1', 'target2'],
-    ...     env_cols=['env1', 'env2', 'env3'],
+    ...     ind_indices=[0, 1],  # target column indices
+    ...     ind_cols_dict={0: [2, 3, 4], 1: [2, 3, 4]},  # env columns for each target
     ...     strategy='oob'
     ... )
-    >>> rg.fit(df)
-    >>> residuals = rg.transform(df)
+    >>> rg.fit(X_array)
+    >>> residuals = rg.transform(X_array)
 
     >>> # Advanced usage with different environmental columns per target
     >>> rg = ResidualGenerator(
-    ...     ind_cols={
-    ...         'target1': ['env1', 'env2'],
-    ...         'target2': ['env2', 'env3', 'env4']
-    ...     },
+    ...     ind_indices=[0, 1],
+    ...     ind_cols_dict={0: [2, 3], 1: [3, 4, 5]},  # different env cols per target
     ...     strategy='kfold',
     ...     bayes_search=True
     ... )
-    >>> rg.fit(df)
-    >>> residuals = rg.transform(df)
+    >>> rg.fit(X_array)
+    >>> residuals = rg.transform(X_array)
+
+    Notes
+    -----
+    This class works exclusively with numpy arrays and integer column indices.
+    All column references must be integer indices into the array columns.
     """
 
     def __init__(
             self,
-            ind_cols: Union[Sequence[str], Dict[str, Sequence[str]]],
-            env_cols: Optional[Sequence[str]] = None,
+            ind_indices: List[int],
+            ind_cols_dict: Dict[int, List[int]],
             *,
             strategy: str | None = "oob",
             kfold_splits: int = 5,
@@ -136,9 +134,8 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         if strategy not in {"oob", "kfold", None}:
             raise ValueError("strategy must be 'oob', 'kfold' or None")
 
-
-        self.ind_cols = ind_cols
-        self.env_cols = env_cols
+        self.ind_indices = ind_indices
+        self.ind_cols_dict = ind_cols_dict
         self.strategy = strategy
         self.kfold_splits = kfold_splits
         self.bayes_search = bayes_search
@@ -148,28 +145,13 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         self.rf_params = rf_params
         self.random_state = check_random_state(random_state)
 
-        # Handle both list and dictionary cases for ind_cols
-        if isinstance(ind_cols, dict):
-            # Dictionary case: each target has its own environmental columns
-            self.ind_cols_dict = {k: list(v) for k, v in ind_cols.items()}
-            self.ind_cols_list = list(ind_cols.keys())  # Cambia nome per evitare conflitti
-            if env_cols is not None:
-                warnings.warn(
-                    "env_cols parameter is ignored when ind_cols is a dictionary. "
-                    "Use the dictionary values to specify environmental columns for each target.",
-                    UserWarning
-                )
-        else:
-            # Sequence case: all targets use the same environmental columns
-            if env_cols is None:
-                raise ValueError("env_cols must be provided when ind_cols is a sequence")
-            self.ind_cols_list = list(ind_cols)
-            self.ind_cols_dict = {col: list(env_cols) for col in self.ind_cols_list}
-
+        # Validate that ind_indices matches ind_cols_dict keys
+        if set(ind_indices) != set(ind_cols_dict.keys()):
+            raise ValueError("ind_indices must match the keys of ind_cols_dict")
 
         # Internal attributes filled during fit
-        self.models_: Dict[str, RandomForestRegressor]
-        self.best_params_: Dict[str, Dict]
+        self.models_: Dict[int, RandomForestRegressor]
+        self.best_params_: Dict[int, Dict]
         self._training_data_fingerprint_: DataFrameFingerprint
         self._residual_cache_: Dict[int, np.ndarray] = {}
 
@@ -199,7 +181,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         }[strategy]
 
     def _bayesian_search(
-            self, X_env: pd.DataFrame, y_ind: pd.Series
+            self, X_env: np.ndarray, y_ind: np.ndarray
     ) -> Dict[str, int]:
         """
         Perform Bayesian hyperparameter optimization using BayesSearchCV.
@@ -210,9 +192,9 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
 
         Parameters
         ----------
-        X_env : pd.DataFrame
+        X_env : np.ndarray
             Environmental features for prediction.
-        y_ind : pd.Series
+        y_ind : np.ndarray
             Target variable to predict.
 
         Returns
@@ -239,7 +221,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
 
         return opt.best_params_
 
-    def _fit_single_model(self, X_env: pd.DataFrame, y_ind: pd.Series, params: dict) -> RandomForestRegressor.fit:
+    def _fit_single_model(self, X_env: np.ndarray, y_ind: np.ndarray, params: dict) -> RandomForestRegressor.fit:
         """
         Fit a single RandomForest model with given parameters.
 
@@ -249,9 +231,9 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
 
         Parameters
         ----------
-        X_env : pd.DataFrame
+        X_env : np.ndarray
             Environmental features for training.
-        y_ind : pd.Series
+        y_ind : np.ndarray
             Target variable to predict.
         params : dict
             Hyperparameters for the RandomForestRegressor.
@@ -297,16 +279,17 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         residuals = model.oob_prediction_
 
         # Check for NaN values in OOB predictions
-        try:
-            assert_all_finite(residuals)
-        except ValueError:
-            print("Warning: OOB predictions contain NaN. Residuals will still be computed, "
-                  "but it is recommended to use strategy='kfold' instead of 'oob' to avoid this issue.")
+        if np.isnan(residuals).any():
+            warnings.warn(
+                "OOB predictions contain NaN. Residuals will still be computed, "
+                "but it is recommended to use strategy='kfold' instead of 'oob' to avoid this issue.",
+                UserWarning
+            )
 
         return residuals
 
     def _get_prediction_kfold(
-            self, model: RandomForestRegressor, X_env: pd.DataFrame, y_col: pd.Series
+            self, model: RandomForestRegressor, X_env: np.ndarray, y_col: np.ndarray
     ) -> np.ndarray:
         """
         Get K-fold cross-validation predictions.
@@ -319,9 +302,9 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         ----------
         model : RandomForestRegressor
             Random Forest model (will be cloned for CV).
-        X_env : pd.DataFrame
+        X_env : np.ndarray
             Environmental features.
-        y_col : pd.Series
+        y_col : np.ndarray
             Target variable.
 
         Returns
@@ -341,7 +324,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         return cross_val_predict(clone(model), X_env, y_col, cv=cv, n_jobs=-1)
 
     def _get_prediction_none(
-            self, model: RandomForestRegressor, X_env: pd.DataFrame
+            self, model: RandomForestRegressor, X_env: np.ndarray
     ) -> np.ndarray:
         """
         Get standard model predictions (potentially leaky).
@@ -354,7 +337,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         ----------
         model : RandomForestRegressor
             Fitted Random Forest model.
-        X_env : pd.DataFrame
+        X_env : np.ndarray
             Environmental features.
 
         Returns
@@ -364,7 +347,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         """
         return model.predict(X_env)
 
-    def fit(self, X: pd.DataFrame, y=None) -> "ResidualGenerator":
+    def fit(self, X: np.ndarray, y=None) -> "ResidualGenerator":
         """
         Train one Random Forest model per target column.
 
@@ -374,8 +357,9 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
 
         Parameters
         ----------
-        X : pd.DataFrame
+        X : np.ndarray
             Training data containing both target and environmental columns.
+            Should already be validated and converted by RIF.
         y : ignored
             Not used, present for API compatibility.
 
@@ -384,34 +368,40 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         ResidualGenerator
             Fitted estimator.
         """
+        # Store fingerprint of original data
+        self._training_data_fingerprint_ = DataFrameFingerprint(X)
+
         # Initialize storage for models and parameters
         self.models_ = {}
         self.best_params_ = {}
-        self._training_data_fingerprint_ = DataFrameFingerprint(X)
 
-        for col in self.ind_cols_list:  # ← Usa ind_cols_list
-            env_cols_for_this_target = self.ind_cols_dict[col]
-            X_env = X[env_cols_for_this_target]
-            y_ind = X[col]
+        # Fit models for each target column
+        for target_idx in self.ind_indices:
+            # Get indices for this target's environmental columns
+            env_indices = self.ind_cols_dict[target_idx]
 
-            # Gestisci i valori None QUI
+            # Extract data using indices
+            X_env = X[:, env_indices]
+            y_ind = X[:, target_idx]
+
+            # Handle hyperparameter optimization
             if self.bayes_search:
                 params = self._bayesian_search(X_env, y_ind)
             else:
                 params = self.rf_params if self.rf_params is not None else {}
 
-            self.models_[col] = self._fit_single_model(X_env, y_ind, params)
-            self.best_params_[col] = params
+            self.models_[target_idx] = self._fit_single_model(X_env, y_ind, params)
+            self.best_params_[target_idx] = params
 
         self._residual_cache_.clear()
         return self
 
-    def transform(self, X: pd.DataFrame) -> np.ndarray:
+    def transform(self, X: np.ndarray) -> np.ndarray:
         """
-        Compute residuals for the input DataFrame.
+        Compute residuals for the input data.
 
-        Results are cached by DataFrame fingerprint, so subsequent calls with
-        DataFrames that have identical structure and content are O(1).
+        Results are cached by data fingerprint, so subsequent calls with
+        data that have identical structure and content are O(1).
 
         The method automatically detects whether the input data is the same
         as the training data and applies the appropriate prediction strategy
@@ -419,8 +409,9 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
 
         Parameters
         ----------
-        X : pd.DataFrame
+        X : np.ndarray
             Data for which to compute residuals.
+            Should already be validated and converted by RIF.
 
         Returns
         -------
@@ -431,13 +422,13 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         Warns
         -----
         UserWarning
-            If the DataFrame has the same structure as the training data but
+            If the data has the same structure as the training data but
             different content, which might indicate potential data leakage.
         """
         # Ensure the model has been fitted
         check_is_fitted(self, "models_")
 
-        # Create fingerprint of the current DataFrame
+        # Create fingerprint of the current data
         current_fingerprint = DataFrameFingerprint(X)
         fingerprint_hash = hash(current_fingerprint)
 
@@ -445,19 +436,22 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
         if fingerprint_hash in self._residual_cache_:
             return self._residual_cache_[fingerprint_hash]
 
+
         residuals: List[np.ndarray] = []
 
-        # Check if this is the same DataFrame used for training
+        # Check if this is the same data used for training
         is_training_set = current_fingerprint == self._training_data_fingerprint_
 
         # Compute residuals for each target column
-        for col in self.ind_cols:
-            model = self.models_[col]
-            y_col = X[col]
+        for target_idx in self.ind_indices:
+            model = self.models_[target_idx]
 
-            # Use specific environmental columns for this target
-            env_cols_for_this_target = self.ind_cols_dict[col]
-            X_env = X[env_cols_for_this_target]
+            # Get indices for this target's columns
+            env_indices = self.ind_cols_dict[target_idx]
+
+            # Extract data using indices
+            X_env = X[:, env_indices]
+            y_col = X[:, target_idx]
 
             if is_training_set:
                 # Use the specified strategy for training data to avoid leakage
@@ -472,10 +466,10 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
                 # This could indicate unintended data leakage scenarios
                 if current_fingerprint.matches_structure_only(self._training_data_fingerprint_):
                     warnings.warn(
-                        "\nThe DataFrame has the same structure (shape, columns, dtypes) as the one used "
-                        "during fit. If you are using the same DataFrame but modified (e.g., after reset_index() "
+                        "\nThe data has the same structure (shape, columns, dtypes) as the one used "
+                        "during fit. If you are using the same data but modified (e.g., after transformations "
                         "or other changes), you might encounter data leakage. Avoid making structural modifications to "
-                        "the DataFrame between fit and predict to ensure the validity of the residuals.",
+                        "the data between fit and predict to ensure the validity of the residuals.",
                         UserWarning,
                         stacklevel=2
                     )
@@ -484,7 +478,7 @@ class ResidualGenerator(BaseEstimator, TransformerMixin):
                 preds = model.predict(X_env)
 
             # Calculate residuals (actual - predicted)
-            residuals.append(y_col.to_numpy() - preds)
+            residuals.append(y_col - preds)
 
         # Cache and return results
         result = np.column_stack(residuals).astype(float)
