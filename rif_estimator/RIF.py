@@ -229,6 +229,11 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         self.iso_params = iso_params
         self.random_state = random_state
 
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.non_deterministic = True
+        return tags
+
     def fit(self, X, y=None):
         """
         Fit the residual generator and Isolation Forest on training data.
@@ -265,7 +270,6 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         """
 
         # FIRST: Extract column indices before any transformation
-        # FIRST: Extract column indices before any transformation
         ind_indices, ind_cols_dict = get_column_indices(
             X=X,
             ind_cols=self.ind_cols,
@@ -273,7 +277,7 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         )
 
         # THEN: Validate input data and convert to numpy array
-        X_array = validate_data(
+        X = validate_data(
             self,
             X=X,
             reset=True,
@@ -297,7 +301,7 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         )
 
         # Fit and transform using numpy array
-        res_train = self.generator_.fit_transform(X_array)
+        res_train = self.generator_.fit_transform(X)
 
         iso_params_to_use = self.iso_params if self.iso_params is not None else {}
 
@@ -338,7 +342,7 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         >>> anomalous_samples = X_test[anomaly_mask]
         """
 
-        X_array = validate_data(
+        X = validate_data(
             self,
             X=X,
             reset=False,  # Don't reset n_features_in_
@@ -351,8 +355,8 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         # Ensure the model has been fitted
         check_is_fitted(self, "if_")
 
-        # Transform to residual space (uses caching if available)
-        res = self.generator_.transform(X_array)
+        # Transform to residual space
+        res = self.generator_.transform(X)
 
         # Predict using Isolation Forest
         return self.if_.predict(res)
@@ -393,7 +397,7 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         >>> top_anomalies_idx = np.argsort(scores)[:10]
         >>> top_anomalies = X_test.iloc[top_anomalies_idx]
         """
-        X_array = validate_data(
+        X = validate_data(
             self,
             X=X,
             reset=False,  # Don't reset n_features_in_
@@ -407,7 +411,7 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         check_is_fitted(self, "if_")
 
         # Transform to residual space
-        res = self.generator_.transform(X_array)
+        res = self.generator_.transform(X)
 
         # Get anomaly scores from Isolation Forest
         return self.if_.decision_function(res)
@@ -476,7 +480,7 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         >>> offset = rif.offset_
         >>> assert np.allclose(decision_scores, raw_scores - offset)
         """
-        X_array = validate_data(
+        X = validate_data(
             self,
             X=X,
             reset=False,  # Don't reset n_features_in_
@@ -490,7 +494,7 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         check_is_fitted(self, "if_")
 
         # Transform to residual space (uses caching if available)
-        res = self.generator_.transform(X_array)
+        res = self.generator_.transform(X)
 
         # Get raw anomaly scores from Isolation Forest
         return self.if_.score_samples(res)

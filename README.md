@@ -28,8 +28,8 @@ Traditional anomaly detection methods often produce false alarms because they do
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   Raw Data      │───▶│ Residual         │───▶│   Isolation     │
-│ (Context + Behavior)│    │ Generation       │    │   Forest        │
-│                 │    │ (Random Forest)  │    │ (Anomaly Detection)│
+│ (Context +      │    │ Generation       │    │   Forest        │
+│   Behavior)     │    │ (Random Forest)  │    │(Anomaly Detect.)│
 └─────────────────┘    └──────────────────┘    └─────────────────┘
         │                        │                        │
         │                        │                        │
@@ -75,19 +75,19 @@ IND_COLS = ['cpu_usage', 'memory_usage', 'response_time']
 
 # Create and train the model
 rif = ResidualIsolationForest(
-    ind_cols=IND_COLS,           # What to monitor (behavioral)
-    env_cols=ENV_COLS,           # What explains it (environmental)  
-    contamination=0.1,           # Expected anomaly rate
-    residual_strategy='oob',     # Leakage-free residuals
-    bayes_search=True            # Auto-tune Random Forest
+    ind_cols=IND_COLS, # What to monitor (behavioral)
+    env_cols=ENV_COLS, # What explains it (environmental)  
+    contamination=0.1, # Expected anomaly rate
+    residual_strategy='oob', # Leakage-free residuals
+    bayes_search=True # Auto-tune Random Forest
 )
 
 # Fit on training data
 rif.fit(X_train)
 
 # Detect anomalies
-predictions = rif.predict(X_test)     # -1 = anomaly, +1 = normal
-anomaly_scores = rif.decision_function(X_test)  # Lower = more anomalous
+predictions = rif.predict(X_test) # -1 = anomaly, +1 = normal
+anomaly_scores = rif.decision_function(X_test) # Lower = more anomalous
 ```
 
 ### Advanced Usage
@@ -101,11 +101,11 @@ feature_mapping = {
 }
 
 rif = ResidualIsolationForest(
-    ind_cols=feature_mapping,    # Dict mapping targets to predictors
+    ind_cols=feature_mapping, # Dict mapping targets to predictors
     contamination=0.05,
-    residual_strategy='kfold',   # Most robust strategy
+    residual_strategy='kfold', # Most robust strategy
     bayes_search=True,
-    bayes_iter=10,              # More thorough hyperparameter search
+    bayes_iter=10, # More thorough hyperparameter search
     iso_params={'max_features': 1, 'max_samples': 0.8}
 )
 ```
@@ -151,7 +151,7 @@ The **most important parameter** for avoiding data leakage:
 server_rif = ResidualIsolationForest(
     ind_cols=['cpu_usage', 'memory_usage', 'disk_io'],
     env_cols=['hour', 'day_of_week', 'active_users', 'network_traffic'],
-    contamination=0.02,  # Expect 2% anomalies
+    contamination=0.02, # Expect 2% anomalies
     residual_strategy='oob'
 )
 
@@ -171,7 +171,7 @@ sensor_mapping = {
 env_rif = ResidualIsolationForest(
     ind_cols=sensor_mapping,
     contamination=0.05,
-    residual_strategy='kfold',  # Maximum robustness
+    residual_strategy='kfold', # Maximum robustness
     bayes_search=True
 )
 ```
@@ -184,12 +184,12 @@ env_rif = ResidualIsolationForest(
 
 ```python
 # Get binary predictions
-predictions = rif.predict(X_test)  # -1 for anomalies, +1 for normal
+predictions = rif.predict(X_test) # -1 for anomalies, +1 for normal
 anomaly_mask = predictions == -1
 print(f"Found {np.sum(anomaly_mask)} anomalies out of {len(X_test)} samples")
 
 # Get continuous anomaly scores 
-scores = rif.decision_function(X_test)  # Lower = more anomalous
+scores = rif.decision_function(X_test) # Lower = more anomalous
 most_anomalous_idx = np.argsort(scores)[:10]
 print(f"Most anomalous samples: {most_anomalous_idx}")
 ```
@@ -328,10 +328,10 @@ predictions = pipeline.predict(X_test)
 fast_rif = ResidualIsolationForest(
     ind_cols=IND_COLS,
     env_cols=ENV_COLS,
-    residual_strategy='oob',     # Faster than k-fold
-    bayes_search=False,          # Skip hyperparameter tuning
+    residual_strategy='oob', # Faster than k-fold
+    bayes_search=False, # Skip hyperparameter tuning
     rf_params={'n_estimators': 100, 'max_depth': 10},  # Fixed params
-    iso_params={'n_estimators': 50}  # Fewer trees
+    iso_params={'n_estimators': 50} # Fewer trees
 )
 ```
 
@@ -342,10 +342,10 @@ fast_rif = ResidualIsolationForest(
 robust_rif = ResidualIsolationForest(
     ind_cols=IND_COLS,
     env_cols=ENV_COLS,
-    residual_strategy='kfold',   # Most robust strategy
+    residual_strategy='kfold', # Most robust strategy
     bayes_search=True,
-    bayes_iter=10,              # Thorough hyperparameter search
-    bayes_cv=5                  # More CV for hyperparameter tuning
+    bayes_iter=10, # Thorough hyperparameter search
+    bayes_cv=5 # More CV for hyperparameter tuning
 )
 ```
 
@@ -361,7 +361,7 @@ RIF uses **DataFrame fingerprinting** to detect when you're applying the model t
 rif.fit(X_train)
 
 # These operations are SAFE - fingerprint remains valid
-predictions = rif.predict(X_train)      # ✅ Uses cached OOB/K-fold residuals
+predictions = rif.predict(X_train) # ✅ Uses cached OOB/K-fold residuals
 scores = rif.decision_function(X_train) # ✅ No data leakage
 ```
 
@@ -371,13 +371,13 @@ scores = rif.decision_function(X_train) # ✅ No data leakage
 rif.fit(X_train)
 
 # These operations BREAK the fingerprint and cause data leakage:
-X_train_modified = X_train.reset_index(drop=True)  # ❌ Index change
-X_train_sorted = X_train.sort_values('column')     # ❌ Row reordering  
-X_train_subset = X_train[X_train['col'] > 0]       # ❌ Filtering
-X_train_new_col = X_train.assign(new_col=1)        # ❌ Column addition
+X_train_modified = X_train.reset_index(drop=True) # ❌ Index change
+X_train_sorted = X_train.sort_values('column') # ❌ Row reordering  
+X_train_subset = X_train[X_train['col'] > 0] # ❌ Filtering
+X_train_new_col = X_train.assign(new_col=1) # ❌ Column addition
 
 # Using modified data causes LEAKAGE:
-predictions = rif.predict(X_train_modified)  # ❌ Uses direct predictions!
+predictions = rif.predict(X_train_modified) # ❌ Uses direct predictions!
 ```
 
 ### 🛡 **Why This Matters**
@@ -388,17 +388,17 @@ predictions = rif.predict(X_train_modified)  # ❌ Uses direct predictions!
 ###  **Best Practices**
 ```python
 # ✅ CORRECT: Keep training data unchanged
-X_train_original = X_train.copy()  # Save original
+X_train_original = X_train.copy() # Save original
 rif.fit(X_train_original)
 
 # Evaluate on original data
-train_predictions = rif.predict(X_train_original)  # Safe
-test_predictions = rif.predict(X_test)             # Always safe
+train_predictions = rif.predict(X_train_original) # Safe
+test_predictions = rif.predict(X_test) # Always safe
 
 # ✅ ALTERNATIVE: Use separate validation set
 X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2)
 rif.fit(X_train)
-val_predictions = rif.predict(X_val)  # Always safe (different data)
+val_predictions = rif.predict(X_val) # Always safe (different data)
 ```
 
 ##  Troubleshooting
@@ -409,7 +409,7 @@ val_predictions = rif.predict(X_val)  # Always safe (different data)
 ```python
 # Solution: Use more trees or switch strategy
 rif = ResidualIsolationForest(
-    residual_strategy='kfold',  # or increase n_estimators
+    residual_strategy='kfold', # or increase n_estimators
     rf_params={'n_estimators': 200}
 )
 ```
@@ -439,7 +439,7 @@ rif = ResidualIsolationForest(
 ```python
 # Solution: Lower contamination or improve features
 rif = ResidualIsolationForest(
-    contamination=0.05,  # Expect fewer anomalies
+    contamination=0.05, # Expect fewer anomalies
     # Add more relevant environmental features
     env_cols=ENV_COLS + ['additional_context_feature']
 )
