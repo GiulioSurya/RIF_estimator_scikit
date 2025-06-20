@@ -1,3 +1,5 @@
+import os
+
 from setuptools import setup, find_packages
 
 # Read the requirements.txt file with proper encoding handling
