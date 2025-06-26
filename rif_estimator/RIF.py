@@ -12,8 +12,8 @@ these expected patterns, the residuals capture only the unexplained variation,
 making anomalies more apparent.
 
 Author: Giulio Surya Lo Verde
-Date: 13/06/2025
-Version: 1.2
+Date: 26/06/2025
+Version: 1.3
 
 References
 ----------
@@ -46,10 +46,12 @@ References
 
 from typing import Sequence, Dict, Optional, Union, List, Tuple
 import numpy as np
+from numbers import Integral, Real
 from skopt.space import Integer
-from sklearn.base import BaseEstimator, OutlierMixin
+from sklearn.base import BaseEstimator, OutlierMixin, _fit_context
 from sklearn.ensemble import IsolationForest
 from sklearn.utils.validation import check_is_fitted, validate_data
+from sklearn.utils._param_validation import Interval, StrOptions
 from utility import ResidualGenerator, get_column_indices
 
 
@@ -200,6 +202,21 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
     sklearn.ensemble.IsolationForest : The base anomaly detection algorithm
     """
 
+    # Scikit-learn automatic parameter validation
+    _parameter_constraints = {
+        "ind_cols": [dict, list, tuple],  # Can be dict or sequence
+        "env_cols": [list, tuple, None],  # Sequence or None
+        "contamination": [Interval(Real, 0.0, 0.5, closed="neither")],
+        "residual_strategy": [StrOptions({"oob", "kfold"}), None],
+        "bayes_search": ["boolean"],
+        "bayes_iter": [Interval(Integral, 1, None, closed="left")],
+        "bayes_cv": [Interval(Integral, 2, None, closed="left")],
+        "rf_search_space": [dict, None],
+        "rf_params": [dict, None],
+        "iso_params": [dict, None],
+        "random_state": [Interval(Integral, 0, None, closed="left"), None],  # >= 0 or None
+    }
+
     def __init__(
             self,
             ind_cols: Union[Sequence[str], Sequence[int], Dict[str, Sequence[str]], Dict[int, Sequence[int]]],
@@ -234,6 +251,7 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         tags.non_deterministic = True
         return tags
 
+    @_fit_context(prefer_skip_nested_validation=False)
     def fit(self, X, y=None):
         """
         Fit the residual generator and Isolation Forest on training data.
@@ -268,6 +286,7 @@ class ResidualIsolationForest(OutlierMixin, BaseEstimator):
         - The appropriateness of the contamination parameter
         - The quality and representativeness of training data
         """
+        # sklearn automatically calls self._validate_params() via @_fit_context decorator
 
         # FIRST: Extract column indices before any transformation
         ind_indices, ind_cols_dict = get_column_indices(

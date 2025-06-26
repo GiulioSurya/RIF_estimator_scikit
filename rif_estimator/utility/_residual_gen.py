@@ -11,18 +11,20 @@ The module supports multiple strategies to avoid data leakage during residual
 computation and includes Bayesian hyperparameter optimization capabilities.
 
 Author: Giulio Surya Lo Verde
-Date: 13/06/2025
-Version: 1.2
+Date: 26/06/2025
+Version: 1.3
 """
 
 from typing import Dict, Optional, List, Tuple
 import numpy as np
+from numbers import Integral, Real
 from skopt import BayesSearchCV
 from skopt.space import Integer
-from sklearn.base import BaseEstimator, TransformerMixin, clone
+from sklearn.base import BaseEstimator, TransformerMixin, clone, _fit_context
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold, cross_val_predict
 from sklearn.utils.validation import check_is_fitted
+from sklearn.utils._param_validation import Interval, StrOptions
 from sklearn.utils import check_random_state
 from functools import partial
 import warnings
@@ -116,6 +118,20 @@ class ResidualGenerator(TransformerMixin, BaseEstimator):
     All column references must be integer indices into the array columns.
     """
 
+    # Scikit-learn automatic parameter validation
+    _parameter_constraints = {
+        "ind_indices": [list],  # Must be a list of integers
+        "ind_cols_dict": [dict],  # Must be a dictionary
+        "strategy": [StrOptions({"oob", "kfold"}), None],  # oob, kfold, or None
+        "kfold_splits": [Interval(Integral, 2, None, closed="left")],  # >= 2
+        "bayes_search": ["boolean"],
+        "bayes_iter": [Interval(Integral, 1, None, closed="left")],  # >= 1
+        "bayes_cv": [Interval(Integral, 2, None, closed="left")],  # >= 2
+        "search_space": [dict, None],
+        "rf_params": [dict, None],
+        "random_state": [Interval(Integral, 0, None, closed="left"), None],  # >= 0 or None
+    }
+
     def __init__(
             self,
             ind_indices: List[int],
@@ -130,9 +146,6 @@ class ResidualGenerator(TransformerMixin, BaseEstimator):
             rf_params: Optional[Dict] = None,
             random_state: Optional[int] = None,
     ) -> None:
-        # Validate strategy parameter
-        if strategy not in {"oob", "kfold", None}:
-            raise ValueError("strategy must be 'oob', 'kfold' or None")
 
         self.ind_indices = ind_indices
         self.ind_cols_dict = ind_cols_dict
@@ -145,7 +158,7 @@ class ResidualGenerator(TransformerMixin, BaseEstimator):
         self.rf_params = rf_params
         self.random_state = check_random_state(random_state)
 
-        # Validate that ind_indices matches ind_cols_dict keys
+        # Custom business logic validation (sklearn can't know this)
         if set(ind_indices) != set(ind_cols_dict.keys()):
             raise ValueError("ind_indices must match the keys of ind_cols_dict")
 
@@ -347,6 +360,7 @@ class ResidualGenerator(TransformerMixin, BaseEstimator):
         """
         return model.predict(X_env)
 
+    @_fit_context(prefer_skip_nested_validation=False)
     def fit(self, X: np.ndarray, y=None) -> "ResidualGenerator":
         """
         Train one Random Forest model per target column.
@@ -368,6 +382,8 @@ class ResidualGenerator(TransformerMixin, BaseEstimator):
         ResidualGenerator
             Fitted estimator.
         """
+        # sklearn automatically calls self._validate_params() via @_fit_context decorator
+
         # Store fingerprint of original data
         self._training_data_fingerprint_ = DataFrameFingerprint(X)
 
@@ -435,7 +451,6 @@ class ResidualGenerator(TransformerMixin, BaseEstimator):
         # Check if residuals are already cached
         if fingerprint_hash in self._residual_cache_:
             return self._residual_cache_[fingerprint_hash]
-
 
         residuals: List[np.ndarray] = []
 
