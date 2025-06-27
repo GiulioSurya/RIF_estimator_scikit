@@ -52,7 +52,7 @@ from sklearn.base import BaseEstimator, OutlierMixin, _fit_context
 from sklearn.ensemble import IsolationForest
 from sklearn.utils.validation import check_is_fitted, validate_data
 from sklearn.utils._param_validation import Interval, StrOptions
-from utility import ResidualGenerator, get_column_indices
+from .utility import ResidualGenerator, get_column_indices
 
 
 class ResidualIsolationForest(OutlierMixin, BaseEstimator):

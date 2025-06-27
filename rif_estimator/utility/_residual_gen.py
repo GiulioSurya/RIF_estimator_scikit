@@ -25,10 +25,9 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold, cross_val_predict
 from sklearn.utils.validation import check_is_fitted
 from sklearn.utils._param_validation import Interval, StrOptions
-from sklearn.utils import check_random_state
 from functools import partial
 import warnings
-from utility import DataFrameFingerprint
+from . import DataFrameFingerprint
 
 # Default search space for Random Forest hyperparameter optimization
 _DEFAULT_RF_SPACE: Dict[str, Integer] = {
@@ -156,7 +155,7 @@ class ResidualGenerator(TransformerMixin, BaseEstimator):
         self.bayes_cv = bayes_cv
         self.search_space = search_space
         self.rf_params = rf_params
-        self.random_state = check_random_state(random_state)
+        self.random_state = random_state
 
         # Custom business logic validation (sklearn can't know this)
         if set(ind_indices) != set(ind_cols_dict.keys()):

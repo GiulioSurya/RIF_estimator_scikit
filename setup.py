@@ -8,7 +8,7 @@ with open("requirements.txt", "r", encoding="utf-8") as f:
 
 setup(
     name='rif_estimator',
-    version='0.1.0',
+    version='1.3.0',
     description='Scikit-learn compatible estimator for contextual anomaly detection based on residuals and Isolation Forest.',
     author='Giulio Surya Lo Verde',
     url='https://github.com/GiulioSurya/RIF_estimator_scikit',
